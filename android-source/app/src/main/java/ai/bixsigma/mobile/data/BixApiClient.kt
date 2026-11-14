@@ -183,6 +183,7 @@ class BixApiClient {
 
     private fun deviceTools(): JSONArray {
         val declarations = JSONArray()
+        declarations.put(functionDeclaration("list_installed_apps", "List launchable apps installed on this phone.", JSONObject(), emptyArray()))
         declarations.put(functionDeclaration("open_app", "Open an installed Android application by its visible app name.", obj(
             "appName" to prop("STRING", "Visible name of the app to open"),
             "query" to prop("STRING", "Optional search text, if opening a search screen")
@@ -231,6 +232,7 @@ class BixApiClient {
     private fun prop(type: String, description: String) = JSONObject().put("type", type).put("description", description)
 
     private fun actionFromFunction(name: String, args: JSONObject): BixAction? = when (name) {
+        "list_installed_apps" -> BixAction(type = "list_apps")
         "open_app" -> BixAction(type = "open_app", appName = args.optString("appName"), query = args.optString("query").takeIf { it.isNotBlank() })
         "open_settings" -> BixAction(type = "open_settings", title = args.optString("section"))
         "open_website" -> BixAction(type = "open_website", url = args.optString("url"))
