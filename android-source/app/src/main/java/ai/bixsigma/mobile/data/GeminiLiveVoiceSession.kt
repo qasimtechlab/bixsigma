@@ -7,6 +7,9 @@ import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.media.AudioManager
+import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.AutomaticGainControl
+import android.media.audiofx.NoiseSuppressor
 import android.util.Base64
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -52,8 +55,12 @@ class GeminiLiveVoiceSession(
     @Volatile private var recorder: AudioRecord? = null
     @Volatile private var player: AudioTrack? = null
     @Volatile private var captureJob: Job? = null
-    private val audioQueue = java.util.concurrent.LinkedBlockingQueue<ByteArray>()
+    // Bound queued speech so a slow handset cannot accumulate unbounded PCM audio.
+    private val audioQueue = java.util.concurrent.LinkedBlockingQueue<ByteArray>(64)
     @Volatile private var playbackJob: Job? = null
+    private var echoCanceler: AcousticEchoCanceler? = null
+    private var noiseSuppressor: NoiseSuppressor? = null
+    private var gainController: AutomaticGainControl? = null
     private var oldAudioMode: Int = AudioManager.MODE_NORMAL
     private var oldSpeakerState: Boolean = false
 
@@ -104,16 +111,9 @@ class GeminiLiveVoiceSession(
 
     fun stop() {
         if (!stopped.compareAndSet(false, true)) return
-        captureJob?.cancel()
-        captureJob = null
-        runCatching { recorder?.stop() }
-        runCatching { recorder?.release() }
-        recorder = null
-        runCatching { player?.pause(); player?.flush(); player?.stop(); player?.release() }
-        player = null
         socket?.close(1000, "User ended voice session")
         socket = null
-        restoreAudioMode()
+        stopAudio()
         scope.cancel()
         onState("Call ended")
     }
@@ -176,7 +176,11 @@ class GeminiLiveVoiceSession(
                     if (encoded.isNotBlank()) {
                         val pcm = Base64.decode(encoded, Base64.DEFAULT)
                         if (pcm.isNotEmpty()) {
-                            audioQueue.offer(pcm)
+                            if (!audioQueue.offer(pcm)) {
+                                // Keep the freshest response audio if the phone falls behind playback.
+                                audioQueue.poll()
+                                audioQueue.offer(pcm)
+                            }
                             onState("BixSigma is speaking...")
                         }
                     }
@@ -235,6 +239,23 @@ class GeminiLiveVoiceSession(
             AudioFormat.ENCODING_PCM_16BIT,
             inputMin * 2
         )
+        if (recorder?.state != AudioRecord.STATE_INITIALIZED) {
+            throw IOException("Phone ka microphone initialize nahi ho saka.")
+        }
+
+        // Enable device echo cancellation, noise suppression and gain control when supported.
+        val audioSessionId = recorder?.audioSessionId ?: AudioRecord.ERROR
+        if (audioSessionId > 0) {
+            if (AcousticEchoCanceler.isAvailable()) {
+                echoCanceler = runCatching { AcousticEchoCanceler.create(audioSessionId)?.apply { enabled = true } }.getOrNull()
+            }
+            if (NoiseSuppressor.isAvailable()) {
+                noiseSuppressor = runCatching { NoiseSuppressor.create(audioSessionId)?.apply { enabled = true } }.getOrNull()
+            }
+            if (AutomaticGainControl.isAvailable()) {
+                gainController = runCatching { AutomaticGainControl.create(audioSessionId)?.apply { enabled = true } }.getOrNull()
+            }
+        }
 
         val outputRate = 24000
         val outputMin = AudioTrack.getMinBufferSize(
@@ -308,6 +329,12 @@ class GeminiLiveVoiceSession(
         playbackJob?.cancel()
         playbackJob = null
         audioQueue.clear()
+        runCatching { echoCanceler?.release() }
+        echoCanceler = null
+        runCatching { noiseSuppressor?.release() }
+        noiseSuppressor = null
+        runCatching { gainController?.release() }
+        gainController = null
         runCatching { recorder?.stop() }
         runCatching { recorder?.release() }
         recorder = null
@@ -325,7 +352,8 @@ class GeminiLiveVoiceSession(
 
     private fun liveTools(): JSONArray {
         val declarations = JSONArray()
-        declarations.put(liveFunction("open_app", "Open an installed Android app.", JSONObject().put("appName", stringProperty("App display name")), arrayOf("appName")))
+        declarations.put(liveFunction("list_installed_apps", "List launchable apps installed on this phone.", JSONObject(), emptyArray()))
+        declarations.put(liveFunction("open_app", "Open an installed Android app by its visible name.", JSONObject().put("appName", stringProperty("App display name")), arrayOf("appName")))
         declarations.put(liveFunction("open_settings", "Open a phone settings area.", JSONObject().put("section", stringProperty("wifi, bluetooth, display, sound, location, apps, battery or accessibility")), arrayOf("section")))
         declarations.put(liveFunction("open_website", "Open a website in the browser.", JSONObject().put("url", stringProperty("Website URL")), arrayOf("url")))
         declarations.put(liveFunction("phone_call", "Prepare a phone call in the dialer; user confirms.", JSONObject()
@@ -360,6 +388,7 @@ class GeminiLiveVoiceSession(
     private fun integerProperty(description: String) = JSONObject().put("type", "INTEGER").put("description", description)
 
     private fun actionFromFunction(name: String, args: JSONObject): BixAction? = when (name) {
+        "list_installed_apps" -> BixAction(type = "list_apps")
         "open_app" -> BixAction(type = "open_app", appName = args.optString("appName"))
         "open_settings" -> BixAction(type = "open_settings", title = args.optString("section"))
         "open_website" -> BixAction(type = "open_website", url = args.optString("url"))
