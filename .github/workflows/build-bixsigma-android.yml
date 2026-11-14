@@ -15,7 +15,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: bixsigma-android-debug
+  group: bixsigma-android-debug-v105
   cancel-in-progress: true
 
 jobs:
@@ -129,6 +129,12 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin "${GITHUB_REF_NAME}"
+          REMOTE_HEAD="$(git rev-parse "origin/${GITHUB_REF_NAME}")"
+          if [ "$REMOTE_HEAD" != "$GITHUB_SHA" ]; then
+            echo "Skipping stale build publication: branch has advanced beyond $GITHUB_SHA."
+            exit 1
+          fi
           # Sync the exact native project sources that were built back to the readable source tree.
           rm -rf android-source/app/src/main
           mkdir -p android-source/app/src/main
@@ -139,7 +145,6 @@ jobs:
             echo "APK output and source unchanged; no release commit needed."
           else
             git commit -m "build: publish BixSigma AI v${VERSION} debug APK and direct Gemini native sources"
-            git fetch origin "${GITHUB_REF_NAME}"
             git rebase "origin/${GITHUB_REF_NAME}"
             git push origin "HEAD:${GITHUB_REF_NAME}"
           fi
