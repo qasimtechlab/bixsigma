@@ -52,7 +52,8 @@ class GeminiLiveVoiceSession(
     @Volatile private var recorder: AudioRecord? = null
     @Volatile private var player: AudioTrack? = null
     @Volatile private var captureJob: Job? = null
-    @Volatile private var speakerStarted = false
+    private val audioQueue = java.util.concurrent.LinkedBlockingQueue<ByteArray>()
+    @Volatile private var playbackJob: Job? = null
     private var oldAudioMode: Int = AudioManager.MODE_NORMAL
     private var oldSpeakerState: Boolean = false
 
@@ -67,7 +68,7 @@ class GeminiLiveVoiceSession(
         val url = HttpUrl.Builder()
             .scheme("wss")
             .host("generativelanguage.googleapis.com")
-            .addPathSegments("ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent")
+            .addPathSegments("ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent")
             .addQueryParameter("key", apiKey.trim())
             .build()
         val request = Request.Builder().url(url).build()
@@ -86,6 +87,7 @@ class GeminiLiveVoiceSession(
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                socket = null
                 stopAudio()
                 val detail = response?.let { "HTTP ${it.code}: ${it.message}" }
                 onError(detail ?: (t.message ?: "Live voice connection failed. Token/model access check karo."))
@@ -93,6 +95,7 @@ class GeminiLiveVoiceSession(
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                socket = null
                 stopAudio()
                 onState("Disconnected")
             }
@@ -124,7 +127,6 @@ class GeminiLiveVoiceSession(
                 put("speechConfig", JSONObject().put("voiceConfig", JSONObject().put(
                     "prebuiltVoiceConfig", JSONObject().put("voiceName", "Kore")
                 )))
-                put("enableAffectiveDialog", true)
             })
             put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", voiceSystemInstruction()))))
             put("tools", liveTools())
@@ -161,6 +163,7 @@ class GeminiLiveVoiceSession(
                 ?.let { onTranscript("BixSigma: $it") }
 
             if (server.optBoolean("interrupted")) {
+                audioQueue.clear()
                 runCatching { player?.pause(); player?.flush(); player?.play() }
                 onState("Listening — go ahead")
             }
@@ -172,12 +175,9 @@ class GeminiLiveVoiceSession(
                     val encoded = inline.optString("data")
                     if (encoded.isNotBlank()) {
                         val pcm = Base64.decode(encoded, Base64.DEFAULT)
-                        val track = player
-                        if (track != null && pcm.isNotEmpty()) {
+                        if (pcm.isNotEmpty()) {
+                            audioQueue.offer(pcm)
                             onState("BixSigma is speaking...")
-                            if (track.playState != AudioTrack.PLAYSTATE_PLAYING) track.play()
-                            track.write(pcm, 0, pcm.size, AudioTrack.WRITE_BLOCKING)
-                            speakerStarted = true
                         }
                     }
                 }
@@ -255,6 +255,24 @@ class GeminiLiveVoiceSession(
             .setBufferSizeInBytes(outputMin * 2)
             .setTransferMode(AudioTrack.MODE_STREAM)
             .build()
+        if (player?.state != AudioTrack.STATE_INITIALIZED) {
+            throw IOException("Phone ka speaker audio initialize nahi kar saka.")
+        }
+        audioQueue.clear()
+        playbackJob?.cancel()
+        playbackJob = scope.launch {
+            while (isActive && !stopped.get()) {
+                val pcm = audioQueue.poll(250, TimeUnit.MILLISECONDS) ?: continue
+                val track = player ?: break
+                if (track.playState != AudioTrack.PLAYSTATE_PLAYING) track.play()
+                var offset = 0
+                while (offset < pcm.size && isActive && !stopped.get()) {
+                    val written = track.write(pcm, offset, pcm.size - offset, AudioTrack.WRITE_BLOCKING)
+                    if (written <= 0) break
+                    offset += written
+                }
+            }
+        }
     }
 
     private fun startMicrophone() {
@@ -266,7 +284,8 @@ class GeminiLiveVoiceSession(
         audio.startRecording()
         captureJob?.cancel()
         captureJob = scope.launch {
-            val buffer = ByteArray(4096)
+            // 16 kHz * 16-bit mono * 40 ms = 1,280 bytes.
+            val buffer = ByteArray(1280)
             while (isActive && !stopped.get()) {
                 val count = audio.read(buffer, 0, buffer.size, AudioRecord.READ_BLOCKING)
                 if (count > 0) {
@@ -286,6 +305,9 @@ class GeminiLiveVoiceSession(
     private fun stopAudio() {
         captureJob?.cancel()
         captureJob = null
+        playbackJob?.cancel()
+        playbackJob = null
+        audioQueue.clear()
         runCatching { recorder?.stop() }
         runCatching { recorder?.release() }
         recorder = null
