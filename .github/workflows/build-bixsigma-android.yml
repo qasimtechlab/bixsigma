@@ -85,10 +85,18 @@ jobs:
           ! grep -q 'enableAffectiveDialog' "$LIVE_FILE"
           grep -q 'ByteArray(1280)' "$LIVE_FILE"
           grep -q 'audioQueue.offer(pcm)' "$LIVE_FILE"
+          grep -q 'AcousticEchoCanceler' "$LIVE_FILE"
+          grep -q 'NoiseSuppressor' "$LIVE_FILE"
+          grep -q 'AutomaticGainControl' "$LIVE_FILE"
+          grep -q 'list_installed_apps' "$LIVE_FILE"
+          grep -q 'list_installed_apps' BixSigmaAndroid/app/src/main/java/ai/bixsigma/mobile/data/BixApiClient.kt
+          grep -q 'list_apps' BixSigmaAndroid/app/src/main/java/ai/bixsigma/mobile/actions/AndroidActionExecutor.kt
+          grep -q 'onConversationLine' BixSigmaAndroid/app/src/main/java/ai/bixsigma/mobile/ui/BixSigmaApp.kt
+          grep -q 'RETRY VOICE CONNECTION' BixSigmaAndroid/app/src/main/java/ai/bixsigma/mobile/ui/BixSigmaApp.kt
           test "$(grep -c 'android.intent.category.LAUNCHER' BixSigmaAndroid/app/src/main/AndroidManifest.xml)" -ge 2
-          sed -i 's/versionCode = 3/versionCode = 4/; s/versionName = "1.0.3"/versionName = "1.0.4"/' BixSigmaAndroid/app/build.gradle.kts
-          grep -q 'versionCode = 4' BixSigmaAndroid/app/build.gradle.kts
-          grep -q 'versionName = "1.0.4"' BixSigmaAndroid/app/build.gradle.kts
+          sed -i 's/versionCode = 4/versionCode = 5/; s/versionName = "1.0.4"/versionName = "1.0.5"/' BixSigmaAndroid/app/build.gradle.kts
+          grep -q 'versionCode = 5' BixSigmaAndroid/app/build.gradle.kts
+          grep -q 'versionName = "1.0.5"' BixSigmaAndroid/app/build.gradle.kts
 
       - name: Build Debug APK
         run: gradle -p BixSigmaAndroid :app:assembleDebug --stacktrace --no-daemon
@@ -111,7 +119,7 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="$(sed -n 's/.*versionName = "\(.*\)".*/\1/p' BixSigmaAndroid/app/build.gradle.kts | head -n 1)"
-          if [ -z "$VERSION" ]; then VERSION="1.0.4"; fi
+          if [ -z "$VERSION" ]; then VERSION="1.0.5"; fi
           mkdir -p releases
           cp "${{ steps.verify.outputs.apk_path }}" "releases/BixSigmaAI-v${VERSION}-debug.apk"
           cp "${{ steps.verify.outputs.apk_path }}" releases/BixSigmaAI-latest.apk
