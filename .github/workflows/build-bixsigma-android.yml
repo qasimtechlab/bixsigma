@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'source/BixSigmaAndroid.zip.b64.part*'
+      - 'source/BixSigmaApp-v1.0.1.kt'
       - 'source/BixSigmaApp-v1.0.1.kt.gz.b64'
       - '.github/workflows/build-bixsigma-android.yml'
   workflow_dispatch:
@@ -66,12 +67,18 @@ jobs:
         run: |
           set -euo pipefail
           UI_FILE="BixSigmaAndroid/app/src/main/java/ai/bixsigma/mobile/ui/BixSigmaApp.kt"
-          base64 --decode source/BixSigmaApp-v1.0.1.kt.gz.b64 | gzip -dc > "$UI_FILE"
-          # Align two settings-dialog calls with the updated shared field component.
+          if [ -s source/BixSigmaApp-v1.0.1.kt ]; then
+            cp source/BixSigmaApp-v1.0.1.kt "$UI_FILE"
+          else
+            base64 --decode source/BixSigmaApp-v1.0.1.kt.gz.b64 | gzip -dc > "$UI_FILE"
+          fi
+          # Keep the old bootstrap patch idempotent while moving the real UI source into plain Kotlin.
           sed -i 's/, single = true, secret = true/, secret = true/; s/, single = true, keyboard = KeyboardType.Uri/, keyboard = KeyboardType.Uri/' "$UI_FILE"
           ! grep -q 'single = true' "$UI_FILE"
           grep -q 'verticalScroll(scrollState)' "$UI_FILE"
           grep -q 'SCROLL DOWN TO COMPLETE SETUP' "$UI_FILE"
+          mkdir -p source
+          cp "$UI_FILE" source/BixSigmaApp-v1.0.1.kt
           # Use a separate preview package: the previous CI debug APK was signed with a different ephemeral key.
           sed -i 's/versionName = "1.0.0"/versionName = "1.0.1"/; s/applicationIdSuffix = ".debug"/applicationIdSuffix = ".preview"/' BixSigmaAndroid/app/build.gradle.kts
           python3 - <<'PY'
@@ -127,11 +134,11 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add releases/
+          git add releases/ source/BixSigmaApp-v1.0.1.kt
           if git diff --cached --quiet; then
-            echo "APK output unchanged; no release commit needed."
+            echo "APK output and source unchanged; no release commit needed."
           else
-            git commit -m "build: publish BixSigma AI v${VERSION} debug APK"
+            git commit -m "build: publish BixSigma AI v${VERSION} debug APK and editable UI source"
             git fetch origin "${GITHUB_REF_NAME}"
             git rebase "origin/${GITHUB_REF_NAME}"
             git push origin "HEAD:${GITHUB_REF_NAME}"
