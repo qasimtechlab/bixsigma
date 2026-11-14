@@ -11,129 +11,242 @@ import org.json.JSONObject
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
+/**
+ * Direct Gemini Developer API client. No user-supplied backend URL is required.
+ * For public production apps, use a protected backend or Firebase AI Logic/App Check:
+ * a key entered on a device can still be extracted from that device by a determined attacker.
+ */
 class BixApiClient {
     private val client = OkHttpClient.Builder()
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(120, TimeUnit.SECONDS)
-        .writeTimeout(60, TimeUnit.SECONDS)
+        .connectTimeout(20, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
         .build()
     private val jsonType = "application/json; charset=utf-8".toMediaType()
 
-    suspend fun checkBackend(baseUrl: String): String = withContext(Dispatchers.IO) {
-        val url = normalizeBase(baseUrl) + "/api/health"
-        val request = Request.Builder().url(url).get().build()
-        client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) throw IOException("Backend health check failed: HTTP ${response.code}")
-            val data = JSONObject(response.body?.string().orEmpty())
-            data.optString("status", "unknown")
+    suspend fun checkApiKey(apiKey: String): String = withContext(Dispatchers.IO) {
+        val key = apiKey.trim()
+        if (key.isBlank()) throw IOException("Token khali hai. Google AI Studio se token paste karo.")
+        val body = JSONObject().apply {
+            put("contents", JSONArray().put(
+                JSONObject().put("role", "user").put("parts", JSONArray().put(JSONObject().put("text", "Reply only with OK.")))
+            ))
+            put("generationConfig", JSONObject().put("maxOutputTokens", 8).put("thinkingConfig", JSONObject().put("thinkingLevel", "low")))
         }
+        val result = executeGenerate(key, body)
+        val reply = extractText(result)
+        if (reply.isBlank()) throw IOException("Gemini ne empty verification response di.")
+        "connected"
     }
 
     suspend fun sendMessage(
-        baseUrl: String,
         apiKey: String,
         userName: String,
         message: String,
         history: List<BixMessage>,
         attachments: List<BixAttachment>,
         onChunk: suspend (String) -> Unit,
-        onAction: suspend (BixAction) -> Unit
+        onAction: suspend (BixAction) -> String
     ): String = withContext(Dispatchers.IO) {
-        val requestData = JSONObject().apply {
-            put("message", message)
-            put("userName", userName)
-            if (apiKey.isNotBlank()) put("apiKey", apiKey)
-            val hist = JSONArray()
-            history.takeLast(24).forEach { item ->
-                hist.put(JSONObject().put("sender", item.sender).put("text", item.text))
+        val key = apiKey.trim()
+        if (key.isBlank()) throw IOException("Gemini token missing hai. Settings mein Add your token karo.")
+
+        val contents = JSONArray()
+        history.takeLast(24).forEach { item ->
+            val text = item.text.trim()
+            if (text.isNotBlank()) {
+                contents.put(
+                    JSONObject()
+                        .put("role", if (item.sender == "user") "user" else "model")
+                        .put("parts", JSONArray().put(JSONObject().put("text", text)))
+                )
             }
-            put("history", hist)
-            val files = JSONArray()
-            attachments.forEach { a ->
-                files.put(JSONObject().put("name", a.name).put("type", a.mimeType).put("dataUrl", a.dataUrl))
-            }
-            put("attachments", files)
         }
-        val base = normalizeBase(baseUrl)
+        if (contents.length() == 0) {
+            contents.put(JSONObject().put("role", "user").put("parts", JSONArray().put(JSONObject().put("text", message))))
+        }
+
+        // Attach the selected document/image to the latest user turn.
+        if (attachments.isNotEmpty()) {
+            var lastUser = -1
+            for (index in 0 until contents.length()) {
+                if (contents.optJSONObject(index)?.optString("role") == "user") lastUser = index
+            }
+            if (lastUser < 0) {
+                contents.put(JSONObject().put("role", "user").put("parts", JSONArray()))
+                lastUser = contents.length() - 1
+            }
+            val parts = contents.getJSONObject(lastUser).optJSONArray("parts") ?: JSONArray()
+            attachments.forEach { attachment ->
+                val encoded = attachment.dataUrl.substringAfter("base64,", "")
+                if (encoded.isBlank()) throw IOException("File data read nahi hui: ${attachment.name}")
+                parts.put(JSONObject().put("inlineData", JSONObject()
+                    .put("mimeType", attachment.mimeType)
+                    .put("data", encoded)))
+                parts.put(JSONObject().put("text", "Attached file: ${attachment.name}"))
+            }
+            contents.getJSONObject(lastUser).put("parts", parts)
+        }
+
+        val completeText = StringBuilder()
+        var round = 0
+        while (round < 4) {
+            round++
+            val requestBody = JSONObject().apply {
+                put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", systemInstruction(userName)))))
+                put("contents", contents)
+                put("tools", deviceTools())
+                put("generationConfig", JSONObject()
+                    .put("temperature", 0.72)
+                    .put("topP", 0.92)
+                    .put("maxOutputTokens", 1200)
+                    .put("thinkingConfig", JSONObject().put("thinkingLevel", "low")))
+            }
+            val response = executeGenerate(key, requestBody)
+            val candidate = response.optJSONArray("candidates")?.optJSONObject(0)
+                ?: throw IOException(response.optJSONObject("error")?.optString("message") ?: "Gemini se response nahi mili.")
+            val modelContent = candidate.optJSONObject("content") ?: JSONObject()
+            val parts = modelContent.optJSONArray("parts") ?: JSONArray()
+            val functions = JSONArray()
+            val functionResponses = JSONArray()
+
+            for (index in 0 until parts.length()) {
+                val part = parts.optJSONObject(index) ?: continue
+                val text = part.optString("text")
+                if (text.isNotBlank()) {
+                    completeText.append(text)
+                    withContext(Dispatchers.Main) { onChunk(text) }
+                }
+                val functionCall = part.optJSONObject("functionCall") ?: continue
+                val name = functionCall.optString("name")
+                val args = functionCall.optJSONObject("args") ?: JSONObject()
+                val action = actionFromFunction(name, args) ?: continue
+                val result = withContext(Dispatchers.Main) { onAction(action) }
+                functions.put(JSONObject()
+                    .put("name", name)
+                    .put("response", JSONObject().put("result", result)))
+            }
+
+            if (functions.length() == 0) break
+            // Continue the same Gemini turn after the Android action has completed.
+            contents.put(JSONObject().put("role", "model").put("parts", parts))
+            val responseParts = JSONArray()
+            for (i in 0 until functions.length()) {
+                responseParts.put(JSONObject().put("functionResponse", functions.getJSONObject(i)))
+            }
+            contents.put(JSONObject().put("role", "user").put("parts", responseParts))
+        }
+
+        val finalText = completeText.toString().trim()
+        if (finalText.isBlank()) throw IOException("Gemini se text response nahi aaya. Token/model access check karo.")
+        finalText
+    }
+
+    private fun executeGenerate(apiKey: String, body: JSONObject): JSONObject {
         val request = Request.Builder()
-            .url("$base/api/chat-stream")
-            .post(requestData.toString().toRequestBody(jsonType))
-            .header("Accept", "text/event-stream, application/json")
+            .url("$API_BASE/v1beta/models/$TEXT_MODEL:generateContent")
+            .header("x-goog-api-key", apiKey)
+            .header("Content-Type", "application/json")
+            .post(body.toString().toRequestBody(jsonType))
             .build()
-
-        var accumulated = StringBuilder()
         client.newCall(request).execute().use { response ->
+            val raw = response.body?.string().orEmpty()
+            val data = runCatching { JSONObject(raw) }.getOrNull()
             if (!response.isSuccessful) {
-                val detail = response.body?.string().orEmpty()
-                val messageText = runCatching { JSONObject(detail).optString("error") }.getOrNull()
-                throw IOException(messageText?.takeIf { it.isNotBlank() } ?: "BixSigma server returned HTTP ${response.code}.")
+                val detail = data?.optJSONObject("error")?.optString("message")
+                throw IOException(detail?.takeIf { it.isNotBlank() } ?: "Gemini API error: HTTP ${response.code}")
             }
-            val body = response.body ?: throw IOException("Server ne empty response di.")
-            val source = body.source()
-            while (!source.exhausted()) {
-                val line = source.readUtf8Line() ?: break
-                val trimmed = line.trim()
-                if (!trimmed.startsWith("data:")) continue
-                val raw = trimmed.removePrefix("data:").trim()
-                if (raw.isBlank()) continue
-                val event = runCatching { JSONObject(raw) }.getOrNull() ?: continue
-                if (event.has("action")) {
-                    val action = event.optJSONObject("action")
-                    if (action != null) withContext(Dispatchers.Main) { onAction(action.toBixAction()) }
-                }
-                val chunk = event.optString("chunk")
-                if (chunk.isNotEmpty()) {
-                    accumulated.append(chunk)
-                    withContext(Dispatchers.Main) { onChunk(chunk) }
-                }
-                val error = event.optString("error")
-                if (error.isNotBlank() && accumulated.isEmpty()) throw IOException(error)
-            }
+            return data ?: throw IOException("Gemini ka response JSON format mein nahi tha.")
         }
-
-        // Fallback mirrors the website's existing behavior if the stream produced no text.
-        if (accumulated.isBlank()) {
-            val fallback = Request.Builder()
-                .url("$base/api/chat")
-                .post(requestData.toString().toRequestBody(jsonType))
-                .build()
-            client.newCall(fallback).execute().use { response ->
-                val raw = response.body?.string().orEmpty()
-                val data = runCatching { JSONObject(raw) }.getOrNull()
-                if (!response.isSuccessful) throw IOException(data?.optString("error")?.takeIf { it.isNotBlank() } ?: "AI request failed: HTTP ${response.code}")
-                val reply = data?.optString("reply")?.takeIf { it.isNotBlank() } ?: data?.optString("response").orEmpty()
-                if (reply.isBlank()) throw IOException("BixSigma AI se koi text response nahi mila.")
-                accumulated.append(reply)
-                withContext(Dispatchers.Main) { onChunk(reply) }
-            }
-        }
-        accumulated.toString()
     }
 
-    private fun normalizeBase(base: String): String {
-        val clean = base.trim().trimEnd('/')
-        if (!clean.startsWith("https://") && !clean.startsWith("http://")) {
-            throw IOException("Backend URL https:// se shuru hona chahiye.")
-        }
-        return clean
+    private fun extractText(response: JSONObject): String {
+        val parts = response.optJSONArray("candidates")?.optJSONObject(0)
+            ?.optJSONObject("content")?.optJSONArray("parts") ?: return ""
+        return (0 until parts.length()).mapNotNull { parts.optJSONObject(it)?.optString("text") }
+            .filter { it.isNotBlank() }.joinToString("")
     }
 
-    private fun JSONObject.toBixAction(): BixAction = BixAction(
-        type = optString("type"),
-        appName = optString("appName").takeIf { it.isNotBlank() },
-        query = optString("query").takeIf { it.isNotBlank() },
-        url = optString("url").takeIf { it.isNotBlank() },
-        phoneNumber = optString("phoneNumber").takeIf { it.isNotBlank() },
-        contactName = optString("contactName").takeIf { it.isNotBlank() },
-        callType = optString("callType").takeIf { it.isNotBlank() },
-        hour = if (has("hour")) optInt("hour") else null,
-        minute = if (has("minute")) optInt("minute") else null,
-        seconds = if (has("seconds")) optInt("seconds") else null,
-        message = optString("message").takeIf { it.isNotBlank() },
-        title = optString("title").takeIf { it.isNotBlank() },
-        startTime = optString("startTime").takeIf { it.isNotBlank() },
-        endTime = optString("endTime").takeIf { it.isNotBlank() },
-        description = optString("description").takeIf { it.isNotBlank() },
-        location = optString("location").takeIf { it.isNotBlank() }
-    )
+    private fun systemInstruction(userName: String) = """
+        You are BixSigma AI, a capable, accurate and friendly professional Android assistant.
+        Your creator is Mirza Qasim (Qasim Mirza) from Faisalabad, Pakistan. If asked who created you,
+        answer clearly: "BixSigma AI was created and developed by Mirza Qasim from Faisalabad, Pakistan."
+        Address the user naturally without repeatedly using their name.
+        Match the user's language. For Urdu/Hindi users, prefer easy, natural Roman Urdu unless they use another script and clearly prefer it.
+        Give useful, specific, direct answers. Avoid filler, fake confidence, excessive disclaimers and long internal deliberation.
+        For simple questions answer quickly in a few clear sentences. For difficult tasks, reason carefully but show only the useful result.
+        Do not search Google for every question. Use your own knowledge first; use a device action only when it directly fulfils the user's request.
+        Never pretend an Android action succeeded: call the relevant function and report its returned result.
+        Ask one short clarification only when an essential detail is missing. Do not invent current facts, phone status, installed apps, prices or events.
+        The signed-in user's display name is ${userName.ifBlank { "the user" }}.
+    """.trimIndent()
+
+    private fun deviceTools(): JSONArray {
+        val declarations = JSONArray()
+        declarations.put(functionDeclaration("open_app", "Open an installed Android application by its visible app name.", obj(
+            "appName" to prop("STRING", "Visible name of the app to open"),
+            "query" to prop("STRING", "Optional search text, if opening a search screen")
+        ), arrayOf("appName")))
+        declarations.put(functionDeclaration("open_settings", "Open an Android settings area such as Wi-Fi, Bluetooth, display, sound or location.", obj(
+            "section" to prop("STRING", "Settings area: wifi, bluetooth, display, sound, location, apps, battery, accessibility")
+        ), arrayOf("section")))
+        declarations.put(functionDeclaration("open_website", "Open a website in the phone browser.", obj("url" to prop("STRING", "Full website address")), arrayOf("url")))
+        declarations.put(functionDeclaration("phone_call", "Open the phone dialer with a phone number. The user confirms the call.", obj(
+            "phoneNumber" to prop("STRING", "Phone number, if known"),
+            "contactName" to prop("STRING", "Contact name, if known"),
+            "callType" to prop("STRING", "Optional call type such as normal or whatsapp")
+        ), emptyArray()))
+        declarations.put(functionDeclaration("send_sms", "Prepare an SMS draft. Never send a message without the user confirming in the messaging app.", obj(
+            "phoneNumber" to prop("STRING", "Recipient phone number"),
+            "message" to prop("STRING", "SMS text")
+        ), arrayOf("phoneNumber", "message")))
+        declarations.put(functionDeclaration("youtube_play", "Open YouTube or search for a video on YouTube.", obj("query" to prop("STRING", "Video title or search phrase")), emptyArray()))
+        declarations.put(functionDeclaration("set_alarm", "Open the Clock app with a proposed alarm; user confirms saving.", obj(
+            "hour" to prop("INTEGER", "Hour from 0 to 23"),
+            "minute" to prop("INTEGER", "Minute from 0 to 59"),
+            "message" to prop("STRING", "Alarm label")
+        ), arrayOf("hour")))
+        declarations.put(functionDeclaration("set_timer", "Prepare a countdown timer in the Clock app; user confirms starting it.", obj(
+            "seconds" to prop("INTEGER", "Timer duration in seconds"),
+            "message" to prop("STRING", "Timer label")
+        ), arrayOf("seconds")))
+        declarations.put(functionDeclaration("create_calendar_event", "Open a calendar event draft for the user to review and save.", obj(
+            "startTime" to prop("STRING", "Start local time in YYYY-MM-DDTHH:mm:ss format"),
+            "endTime" to prop("STRING", "End local time in YYYY-MM-DDTHH:mm:ss format"),
+            "title" to prop("STRING", "Event title"),
+            "description" to prop("STRING", "Event details"),
+            "location" to prop("STRING", "Event location")
+        ), arrayOf("startTime", "endTime", "title")))
+        return JSONArray().put(JSONObject().put("functionDeclarations", declarations))
+    }
+
+    private fun functionDeclaration(name: String, description: String, properties: JSONObject, required: Array<String>) =
+        JSONObject().put("name", name).put("description", description)
+            .put("parameters", JSONObject().put("type", "OBJECT").put("properties", properties).put("required", JSONArray(required)))
+
+    private fun obj(vararg fields: Pair<String, JSONObject>) = JSONObject().apply {
+        fields.forEach { (key, value) -> put(key, value) }
+    }
+
+    private fun prop(type: String, description: String) = JSONObject().put("type", type).put("description", description)
+
+    private fun actionFromFunction(name: String, args: JSONObject): BixAction? = when (name) {
+        "open_app" -> BixAction(type = "open_app", appName = args.optString("appName"), query = args.optString("query").takeIf { it.isNotBlank() })
+        "open_settings" -> BixAction(type = "open_settings", title = args.optString("section"))
+        "open_website" -> BixAction(type = "open_website", url = args.optString("url"))
+        "phone_call" -> BixAction(type = "phone_call", phoneNumber = args.optString("phoneNumber").takeIf { it.isNotBlank() }, contactName = args.optString("contactName").takeIf { it.isNotBlank() }, callType = args.optString("callType").takeIf { it.isNotBlank() })
+        "send_sms" -> BixAction(type = "send_sms", phoneNumber = args.optString("phoneNumber"), message = args.optString("message"))
+        "youtube_play" -> BixAction(type = "youtube_play", query = args.optString("query"))
+        "set_alarm" -> BixAction(type = "set_alarm", hour = args.optInt("hour"), minute = args.optInt("minute"), message = args.optString("message"))
+        "set_timer" -> BixAction(type = "set_timer", seconds = args.optInt("seconds"), message = args.optString("message"))
+        "create_calendar_event" -> BixAction(type = "create_calendar_event", startTime = args.optString("startTime"), endTime = args.optString("endTime"), title = args.optString("title"), description = args.optString("description"), location = args.optString("location"))
+        else -> null
+    }
+
+    companion object {
+        const val API_BASE = "https://generativelanguage.googleapis.com"
+        const val TEXT_MODEL = "gemini-3.8-flash"
+        const val LIVE_MODEL = "gemini-3.8-live"
+        const val TOKEN_URL = "https://aistudio.google.com/apikey"
+    }
 }
