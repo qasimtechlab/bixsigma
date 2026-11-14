@@ -4,6 +4,11 @@
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
     <queries>
+        <!-- Allow listing launchable apps without requesting the restricted QUERY_ALL_PACKAGES permission. -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
         <package android:name="com.whatsapp" />
         <package android:name="com.instagram.android" />
         <package android:name="com.facebook.katana" />
