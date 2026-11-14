@@ -72,7 +72,8 @@ jobs:
           ! grep -q 'single = true' "$UI_FILE"
           grep -q 'verticalScroll(scrollState)' "$UI_FILE"
           grep -q 'SCROLL DOWN TO COMPLETE SETUP' "$UI_FILE"
-          # Use a separate preview package: the previous CI debug APK was signed with a different ephemeral key.\n          sed -i 's/versionName = "1.0.0"/versionName = "1.0.1"/; s/applicationIdSuffix = ".debug"/applicationIdSuffix = ".preview"/' BixSigmaAndroid/app/build.gradle.kts
+          # Use a separate preview package: the previous CI debug APK was signed with a different ephemeral key.
+          sed -i 's/versionName = "1.0.0"/versionName = "1.0.1"/; s/applicationIdSuffix = ".debug"/applicationIdSuffix = ".preview"/' BixSigmaAndroid/app/build.gradle.kts
           python3 - <<'PY'
           from pathlib import Path
           p = Path("BixSigmaAndroid/app/src/main/java/ai/bixsigma/mobile/MainActivity.kt")
