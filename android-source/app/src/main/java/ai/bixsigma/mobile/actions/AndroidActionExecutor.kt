@@ -14,6 +14,7 @@ class AndroidActionExecutor(private val context: Context) {
     fun execute(action: BixAction): String {
         return try {
             when (action.type.lowercase()) {
+                "list_apps" -> listInstalledApps()
                 "open_app" -> openApp(action.appName.orEmpty(), action.query)
                 "open_settings" -> openSettings(action.title.orEmpty())
                 "send_sms" -> prepareSms(action.phoneNumber, action.message)
@@ -30,6 +31,17 @@ class AndroidActionExecutor(private val context: Context) {
         } catch (e: Exception) {
             "Action perform nahi ho saka: ${e.message ?: "unknown error"}"
         }
+    }
+
+    private fun listInstalledApps(): String {
+        val launcherIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        val names = context.packageManager.queryIntentActivities(launcherIntent, 0)
+            .map { it.loadLabel(context.packageManager).toString().trim() }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .sortedBy { it.lowercase(Locale.ROOT) }
+        if (names.isEmpty()) return "Android ne koi launchable app list nahi ki."
+        return "Phone mein ${names.size} launchable apps mili hain: ${names.joinToString(", ")}"
     }
 
     private fun openApp(rawName: String, query: String?): String {
