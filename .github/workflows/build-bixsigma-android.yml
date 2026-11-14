@@ -106,6 +106,15 @@ jobs:
           grep -q 'SOFT_INPUT_ADJUST_RESIZE' BixSigmaAndroid/app/src/main/java/ai/bixsigma/mobile/MainActivity.kt
           grep -q 'versionCode = 2' BixSigmaAndroid/app/build.gradle.kts
           grep -q 'versionName = "1.0.2"' BixSigmaAndroid/app/build.gradle.kts
+          # Publish the native app sources as readable files so later changes are made against the real project.
+          rm -rf android-source
+          mkdir -p android-source/app/src/main
+          cp -R BixSigmaAndroid/app/src/main/java android-source/app/src/main/
+          cp -R BixSigmaAndroid/app/src/main/res android-source/app/src/main/ 2>/dev/null || true
+          cp BixSigmaAndroid/app/src/main/AndroidManifest.xml android-source/app/src/main/
+          cp BixSigmaAndroid/app/build.gradle.kts android-source/app/
+          cp BixSigmaAndroid/settings.gradle.kts android-source/
+          cp BixSigmaAndroid/build.gradle.kts android-source/ 2>/dev/null || true
 
       - name: Build Debug APK
         run: gradle -p BixSigmaAndroid :app:assembleDebug --stacktrace --no-daemon
@@ -138,11 +147,11 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add releases/ source/BixSigmaApp-v1.0.1.kt
+          git add releases/ source/BixSigmaApp-v1.0.1.kt android-source/
           if git diff --cached --quiet; then
             echo "APK output and source unchanged; no release commit needed."
           else
-            git commit -m "build: publish BixSigma AI v${VERSION} debug APK and editable UI source"
+            git commit -m "build: publish BixSigma AI v${VERSION} debug APK and native project sources"
             git fetch origin "${GITHUB_REF_NAME}"
             git rebase "origin/${GITHUB_REF_NAME}"
             git push origin "HEAD:${GITHUB_REF_NAME}"
