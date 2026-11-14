@@ -222,7 +222,7 @@ class BixApiClient {
 
     private fun functionDeclaration(name: String, description: String, properties: JSONObject, required: Array<String>) =
         JSONObject().put("name", name).put("description", description)
-            .put("parameters", JSONObject().put("type", "OBJECT").put("properties", properties).put("required", JSONArray(required)))
+            .put("parameters", JSONObject().put("type", "OBJECT").put("properties", properties).put("required", JSONArray().apply { required.forEach { put(it) } }))
 
     private fun obj(vararg fields: Pair<String, JSONObject>) = JSONObject().apply {
         fields.forEach { (key, value) -> put(key, value) }
