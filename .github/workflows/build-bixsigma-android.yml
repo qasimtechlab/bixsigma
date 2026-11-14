@@ -92,7 +92,7 @@ jobs:
           p.write_text(s)
           PY
           grep -q 'SOFT_INPUT_ADJUST_RESIZE' BixSigmaAndroid/app/src/main/java/ai/bixsigma/mobile/MainActivity.kt
-          grep -q 'versionCode = 2' BixSigmaAndroid/app/build.gradle.kts
+          grep -q 'versionCode = 1' BixSigmaAndroid/app/build.gradle.kts
           grep -q 'versionName = "1.0.1"' BixSigmaAndroid/app/build.gradle.kts
 
       - name: Build Debug APK
