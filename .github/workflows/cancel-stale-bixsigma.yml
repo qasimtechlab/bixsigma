@@ -1,0 +1,35 @@
+name: Cancel Stale BixSigma Android Builds
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/cancel-stale-bixsigma.yml'
+
+permissions:
+  actions: write
+
+jobs:
+  cancel-stale:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Cancel superseded Android build runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh run list \
+            --repo "$GITHUB_REPOSITORY" \
+            --workflow "Build BixSigma AI Android Debug APK" \
+            --limit 100 \
+            --json databaseId,headSha,status \
+            | jq -r --arg current "$GITHUB_SHA" '
+                .[]
+                | select(.headSha != $current and .status != "completed")
+                | .databaseId
+              ' \
+            | while IFS= read -r run_id; do
+                [ -n "$run_id" ] || continue
+                gh run cancel "$run_id" --repo "$GITHUB_REPOSITORY" || true
+              done
