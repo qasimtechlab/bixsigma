@@ -1,0 +1,119 @@
+name: Build BixSigma AI Android Debug APK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'source/BixSigmaAndroid.zip.b64.part*'
+      - '.github/workflows/build-bixsigma-android.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bixsigma-android-debug
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build, verify and publish Debug APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+
+      - name: Install Android SDK packages
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Restore native Android project and verify source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/bixsigma-source
+          cat source/BixSigmaAndroid.zip.b64.part* > /tmp/bixsigma-source.b64
+          test "$(wc -c < /tmp/bixsigma-source.b64 | tr -d ' ')" = "39484"
+          base64 --decode /tmp/bixsigma-source.b64 > /tmp/BixSigmaAndroid.zip
+          echo "5767de929292bfe09cbbc89a591982bd1f79b7137ce850c239f29fb8f33ecc95  /tmp/BixSigmaAndroid.zip" | sha256sum --check
+          unzip -tq /tmp/BixSigmaAndroid.zip
+          unzip -oq /tmp/BixSigmaAndroid.zip -d .
+          test -f BixSigmaAndroid/settings.gradle.kts
+          test -f BixSigmaAndroid/app/src/main/AndroidManifest.xml
+
+      - name: Build Debug APK
+        run: gradle -p BixSigmaAndroid :app:assembleDebug --stacktrace --no-daemon
+
+      - name: Verify APK
+        id: verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="BixSigmaAndroid/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+          echo "apk_path=$APK" >> "$GITHUB_OUTPUT"
+          echo "APK size: $(stat -c%s "$APK") bytes"
+          sha256sum "$APK"
+
+      - name: Publish direct APK download in releases folder
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION="$(sed -n 's/.*versionName = "\(.*\)".*/\1/p' BixSigmaAndroid/app/build.gradle.kts | head -n 1)"
+          if [ -z "$VERSION" ]; then VERSION="1.0.0"; fi
+          mkdir -p releases
+          cp "${{ steps.verify.outputs.apk_path }}" "releases/BixSigmaAI-v${VERSION}-debug.apk"
+          cp "${{ steps.verify.outputs.apk_path }}" releases/BixSigmaAI-latest.apk
+          RELEASE_DATE="$(date -u +%Y-%m-%d)"
+          APK_SHA="$(sha256sum releases/BixSigmaAI-latest.apk | awk '{print $1}')"
+          printf '{"version":"%s","releaseDate":"%s","file":"BixSigmaAI-latest.apk","sha256":"%s"}\n' "$VERSION" "$RELEASE_DATE" "$APK_SHA" > releases/latest.json
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add releases/
+          if git diff --cached --quiet; then
+            echo "APK output unchanged; no release commit needed."
+          else
+            git commit -m "build: publish BixSigma AI v${VERSION} debug APK"
+            git fetch origin "${GITHUB_REF_NAME}"
+            git rebase "origin/${GITHUB_REF_NAME}"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
+
+      - name: Upload Debug APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BixSigmaAI-debug-APK
+          path: ${{ steps.verify.outputs.apk_path }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload Android build reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: BixSigmaAI-build-reports
+          path: BixSigmaAndroid/app/build/reports/
+          if-no-files-found: ignore
+          retention-days: 7
