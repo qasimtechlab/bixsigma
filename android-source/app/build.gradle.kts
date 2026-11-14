@@ -12,8 +12,8 @@ android {
         applicationId = "ai.bixsigma.mobile"
         minSdk = 23 // Android 6.0+, compatible with the target Android 7.1 phone
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.0.3"
+        versionCode = 4
+        versionName = "1.0.4"
     }
 
     buildTypes {
