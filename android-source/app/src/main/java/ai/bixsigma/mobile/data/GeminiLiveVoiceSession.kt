@@ -332,7 +332,7 @@ class GeminiLiveVoiceSession(
 
     private fun liveFunction(name: String, description: String, properties: JSONObject, required: Array<String>) =
         JSONObject().put("name", name).put("description", description)
-            .put("parameters", JSONObject().put("type", "OBJECT").put("properties", properties).put("required", JSONArray(required)))
+            .put("parameters", JSONObject().put("type", "OBJECT").put("properties", properties).put("required", JSONArray().apply { required.forEach { put(it) } }))
 
     private fun stringProperty(description: String) = JSONObject().put("type", "STRING").put("description", description)
     private fun integerProperty(description: String) = JSONObject().put("type", "INTEGER").put("description", description)
