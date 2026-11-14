@@ -73,14 +73,6 @@ class SettingsStore(context: Context) {
             writeDocument(doc)
         }
 
-    var backendUrl: String
-        @Synchronized get() = readDocument().optString("backend_url")
-        @Synchronized set(value) {
-            val doc = readDocument()
-            doc.put("backend_url", value.trim().trimEnd('/'))
-            writeDocument(doc)
-        }
-
     var account: BixAccount?
         @Synchronized get() {
             val account = readDocument().optJSONObject("firebase_account") ?: return null
