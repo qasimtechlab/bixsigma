@@ -1,11 +1,13 @@
 package ai.bixsigma.mobile.ui
 
+import android.Manifest
 import android.content.Intent
-import android.speech.RecognizerIntent
-import android.speech.tts.TextToSpeech
+import android.content.pm.PackageManager
+import android.net.Uri
 import android.util.Base64
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -30,6 +32,8 @@ import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -48,12 +52,13 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import ai.bixsigma.mobile.actions.AndroidActionExecutor
 import ai.bixsigma.mobile.data.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.util.Locale
 
 private val Bg = Color(0xFF070B16)
 private val Panel = Color(0xFF111827)
@@ -81,7 +86,7 @@ fun BixSigmaApp() {
         Surface(Modifier.fillMaxSize(), color = Bg) {
             when {
                 checking -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Cyan) }
-                account == null || settings.apiKey.isBlank() || settings.backendUrl.isBlank() -> AuthScreen(settings, firebase, api) { account = it }
+                account == null || settings.apiKey.isBlank() -> AuthScreen(settings, firebase, api) { account = it }
                 else -> ChatScreen(account!!, settings, firebase, api) {
                     settings.clearAccount()
                     account = null
@@ -98,16 +103,16 @@ private fun AuthScreen(
     api: BixApiClient,
     onAuthenticated: (BixAccount) -> Unit
 ) {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val scrollState = rememberScrollState()
-    var step by remember { mutableIntStateOf(if (settings.apiKey.isNotBlank() && settings.backendUrl.isNotBlank()) 1 else 0) }
+    var step by remember { mutableIntStateOf(if (settings.apiKey.isNotBlank()) 1 else 0) }
     var register by remember { mutableStateOf(true) }
     var name by remember { mutableStateOf("") }
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var confirmPassword by remember { mutableStateOf("") }
     var key by remember { mutableStateOf(settings.apiKey) }
-    var backend by remember { mutableStateOf(settings.backendUrl) }
     var showKey by remember { mutableStateOf(false) }
     var showPassword by remember { mutableStateOf(false) }
     var showConfirmPassword by remember { mutableStateOf(false) }
@@ -162,7 +167,7 @@ private fun AuthScreen(
             )
             Spacer(Modifier.height(5.dp))
             Text(
-                if (step == 0) "Connect your Gemini key and live BixSigma server. This is a one-time setup."
+                if (step == 0) "Add your Gemini token once. No server URL or separate backend setup is needed."
                 else "Create your BixSigma account or sign in to continue.",
                 color = Muted,
                 fontSize = 13.sp,
@@ -197,35 +202,40 @@ private fun AuthScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             if (step == 0) {
-                Text("CONNECT GEMINI + BACKEND", color = White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                Text("Enter the credentials used by your BixSigma deployment.", color = Muted, fontSize = 12.sp, lineHeight = 17.sp)
+                Text("CONNECT YOUR GEMINI TOKEN", color = White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                Text("Get a token from Google AI Studio, paste it here, and connect directly to Gemini.", color = Muted, fontSize = 12.sp, lineHeight = 17.sp)
 
                 DarkField(
                     value = key,
                     onChange = { key = it; error = "" },
-                    label = "Gemini API key",
+                    label = "Add your token",
                     secret = true,
                     secretVisible = showKey,
                     onToggleSecret = { showKey = !showKey },
-                    keyboard = KeyboardType.Ascii
+                    keyboard = KeyboardType.Ascii,
+                    imeAction = ImeAction.Done
                 )
-                DarkField(
-                    value = backend,
-                    onChange = { backend = it; error = "" },
-                    label = "Live BixSigma backend URL",
-                    keyboard = KeyboardType.Uri
-                )
+                Button(
+                    onClick = {
+                        runCatching {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(BixApiClient.TOKEN_URL)))
+                        }.onFailure { error = "Google AI Studio browser mein open nahi ho saka." }
+                    },
+                    modifier = Modifier.fillMaxWidth().height(46.dp),
+                    shape = RoundedCornerShape(13.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = PanelAlt, contentColor = Cyan)
+                ) {
+                    Text("GET YOUR TOKEN  ↗", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
                 Text(
-                    "Use your deployed server's HTTPS address, for example https://your-server.example.com. Google AI Studio editor URL yahan kaam nahi karega.",
-                    color = Muted,
-                    fontSize = 11.sp,
-                    lineHeight = 16.sp
+                    "Google AI Studio mein API key create karke copy karo. Free tier ki usage limits Google ke rules ke mutabiq hoti hain.",
+                    color = Muted, fontSize = 11.sp, lineHeight = 16.sp
                 )
                 Surface(color = Color(0xFF0D1C2C), shape = RoundedCornerShape(12.dp)) {
                     Row(Modifier.fillMaxWidth().padding(11.dp), verticalAlignment = Alignment.Top) {
                         Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = Cyan, modifier = Modifier.size(17.dp))
                         Spacer(Modifier.width(8.dp))
-                        Text("A connection test runs before moving to account setup. Your key is stored in encrypted app storage.", color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
+                        Text("Token device ke encrypted app storage mein save hota hai. Test ke baad tumhara Gemini account connect ho jayega.", color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
                     }
                 }
                 if (error.isNotBlank()) AuthMessage(error, isError = true)
@@ -235,22 +245,18 @@ private fun AuthScreen(
                     onClick = {
                         error = ""
                         success = ""
-                        if (key.isBlank() || backend.isBlank()) {
-                            error = "Gemini API key aur backend URL dono enter karo."
+                        if (key.isBlank()) {
+                            error = "Google AI Studio se token copy karke paste karo."
                         } else {
                             loading = true
                             scope.launch {
                                 try {
-                                    val status = api.checkBackend(backend.trim())
-                                    if (!status.equals("ok", ignoreCase = true)) {
-                                        throw IllegalStateException("Backend ne expected OK status return nahi kiya.")
-                                    }
+                                    api.checkApiKey(key.trim())
                                     settings.apiKey = key.trim()
-                                    settings.backendUrl = backend.trim()
-                                    success = "Backend connected successfully."
+                                    success = "Gemini token verified. Connection ready."
                                     step = 1
                                 } catch (e: Exception) {
-                                    error = e.message ?: "Connection test failed. URL check karke dobara try karo."
+                                    error = e.message ?: "Token verify nahi ho saka. Token aur Google AI Studio access check karo."
                                 } finally {
                                     loading = false
                                 }
@@ -263,7 +269,7 @@ private fun AuthScreen(
                     colors = ButtonDefaults.buttonColors(containerColor = Cyan, contentColor = Bg)
                 ) {
                     if (loading) CircularProgressIndicator(Modifier.size(19.dp), color = Bg, strokeWidth = 2.dp)
-                    else Text("TEST CONNECTION  •  NEXT", fontWeight = FontWeight.ExtraBold, fontSize = 13.sp)
+                    else Text("VERIFY TOKEN  •  NEXT", fontWeight = FontWeight.ExtraBold, fontSize = 13.sp)
                 }
             } else {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -493,21 +499,14 @@ private fun ChatScreen(account: BixAccount, settings: SettingsStore, firebase: F
     var errorText by remember { mutableStateOf("") }
     var notice by remember { mutableStateOf("") }
     var showSettings by remember { mutableStateOf(false) }
+    var showVoice by remember { mutableStateOf(false) }
     var settingsBusy by remember { mutableStateOf(false) }
     var showSettingsKey by remember { mutableStateOf(false) }
     var key by remember { mutableStateOf(settings.apiKey) }
-    var backend by remember { mutableStateOf(settings.backendUrl) }
-    var ttsReady by remember { mutableStateOf(false) }
-    val tts = remember { TextToSpeech(context) { status -> ttsReady = status == TextToSpeech.SUCCESS } }
-    DisposableEffect(Unit) { onDispose { tts.stop(); tts.shutdown() } }
-
     LaunchedEffect(messages.size, messages.lastOrNull()?.text) {
         if (messages.isNotEmpty()) chatListState.scrollToItem(messages.lastIndex)
     }
 
-    val speechLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        if (result.resultCode == android.app.Activity.RESULT_OK) input = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull().orEmpty()
-    }
     val fileLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) scope.launch {
             try {
@@ -544,7 +543,6 @@ private fun ChatScreen(account: BixAccount, settings: SettingsStore, firebase: F
         scope.launch {
             try {
                 val answer = api.sendMessage(
-                    baseUrl = settings.backendUrl,
                     apiKey = settings.apiKey,
                     userName = account.displayName.ifBlank { account.email.substringBefore('@') },
                     message = prompt,
@@ -554,7 +552,7 @@ private fun ChatScreen(account: BixAccount, settings: SettingsStore, firebase: F
                         val i = messages.indexOfFirst { it.id == botId }
                         if (i >= 0) messages[i] = messages[i].copy(text = messages[i].text + part)
                     },
-                    onAction = { action -> notice = executor.execute(action) }
+                    onAction = { action -> executor.execute(action).also { result -> scope.launch(Dispatchers.Main) { notice = result } } }
                 )
                 val i = messages.indexOfFirst { it.id == botId }
                 if (i >= 0 && messages[i].text.isBlank()) messages[i] = messages[i].copy(text = answer)
@@ -577,6 +575,11 @@ private fun ChatScreen(account: BixAccount, settings: SettingsStore, firebase: F
                 Text("BixSigma AI", color = White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
                 Text("MOBILE INTELLIGENCE • ONLINE", color = Cyan, fontSize = 9.sp, letterSpacing = 1.sp)
             }
+            TextButton(onClick = { showVoice = true }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)) {
+                Icon(Icons.Filled.GraphicEq, "Live voice", tint = Cyan, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("LIVE", color = Cyan, fontWeight = FontWeight.ExtraBold, fontSize = 10.sp)
+            }
             IconButton(onClick = { showSettings = true; errorText = "" }) { Icon(Icons.Filled.Settings, "Settings", tint = Muted) }
             IconButton(onClick = onLogout) { Icon(Icons.Filled.Logout, "Logout", tint = Muted) }
         }
@@ -593,7 +596,6 @@ private fun ChatScreen(account: BixAccount, settings: SettingsStore, firebase: F
             items(messages, key = { it.id }) { item ->
                 MessageBubble(
                     message = item,
-                    onSpeak = { text -> if (ttsReady) tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, item.id) },
                     onCopy = { text ->
                         clipboardManager.setText(AnnotatedString(text))
                         notice = "Response copied to clipboard."
@@ -609,14 +611,9 @@ private fun ChatScreen(account: BixAccount, settings: SettingsStore, firebase: F
         } }
         Row(Modifier.fillMaxWidth().background(Panel).padding(horizontal = 7.dp, vertical = 8.dp), verticalAlignment = Alignment.Bottom) {
             IconButton(onClick = { fileLauncher.launch(arrayOf("*/*")) }, enabled = !busy) { Icon(Icons.Filled.AttachFile, "Attach", tint = Muted) }
-            IconButton(onClick = {
-                val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
-                    putExtra(RecognizerIntent.EXTRA_PROMPT, "BixSigma ko command dein")
-                }
-                runCatching { speechLauncher.launch(intent) }.onFailure { errorText = "Speech recognition service available nahi." }
-            }, enabled = !busy) { Icon(Icons.Filled.Mic, "Voice input", tint = Cyan) }
+            IconButton(onClick = { showVoice = true }, enabled = !busy) {
+                Icon(Icons.Filled.GraphicEq, "Start Gemini Live voice call", tint = Cyan)
+            }
             OutlinedTextField(
                 value = input, onValueChange = { input = it }, modifier = Modifier.weight(1f),
                 placeholder = { Text("Message BixSigma...", color = Muted, fontSize = 12.sp) }, maxLines = 4,
@@ -631,6 +628,12 @@ private fun ChatScreen(account: BixAccount, settings: SettingsStore, firebase: F
         }
     }
 
+    if (showVoice) LiveVoiceDialog(
+        apiKey = settings.apiKey,
+        onAction = { action -> executor.execute(action).also { result -> scope.launch(Dispatchers.Main) { notice = result } } },
+        onClose = { showVoice = false }
+    )
+
     if (showSettings) AlertDialog(
         onDismissRequest = { showSettings = false },
         title = { Text("BixSigma Settings", color = White) },
@@ -640,15 +643,20 @@ private fun ChatScreen(account: BixAccount, settings: SettingsStore, firebase: F
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 DarkField(
-                    key, { key = it }, "Gemini API key",
+                    key, { key = it }, "Add your token",
                     secret = true,
                     secretVisible = showSettingsKey,
                     onToggleSecret = { showSettingsKey = !showSettingsKey },
                     keyboard = KeyboardType.Ascii
                 )
-                DarkField(backend, { backend = it }, "Backend URL", keyboard = KeyboardType.Uri)
+                TextButton(
+                    onClick = {
+                        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(BixApiClient.TOKEN_URL))) }
+                            .onFailure { errorText = "Browser open nahi ho saka." }
+                    }
+                ) { Text("GET YOUR TOKEN ↗", color = Cyan) }
                 if (errorText.isNotBlank()) AuthMessage(errorText, isError = true)
-                Text("API key encrypted storage mein save hoti hai. Backend par /api/health endpoint required hai.", color = Muted, fontSize = 10.sp)
+                Text("Token device ke encrypted app storage mein rakha jata hai. Public production apps mein personal API token embed na karo.", color = Muted, fontSize = 10.sp, lineHeight = 14.sp)
             }
         },
         confirmButton = {
@@ -656,22 +664,18 @@ private fun ChatScreen(account: BixAccount, settings: SettingsStore, firebase: F
                 enabled = !settingsBusy,
                 onClick = {
                     errorText = ""
-                    if (key.isBlank() || backend.isBlank()) {
-                        errorText = "Gemini API key aur backend URL dono zaroori hain."
+                    if (key.isBlank()) {
+                        errorText = "Token paste karo."
                     } else {
                         settingsBusy = true
                         scope.launch {
                             try {
-                                val status = api.checkBackend(backend.trim())
-                                if (!status.equals("ok", ignoreCase = true)) {
-                                    throw IllegalStateException("Backend ne expected OK status return nahi kiya.")
-                                }
+                                api.checkApiKey(key.trim())
                                 settings.apiKey = key.trim()
-                                settings.backendUrl = backend.trim()
                                 showSettings = false
-                                notice = "Settings saved. Backend: $status"
+                                notice = "Gemini token verified and saved."
                             } catch (e: Exception) {
-                                errorText = e.message ?: "Backend check failed"
+                                errorText = e.message ?: "Token verify nahi ho saka."
                             } finally {
                                 settingsBusy = false
                             }
@@ -689,7 +693,7 @@ private fun ChatScreen(account: BixAccount, settings: SettingsStore, firebase: F
 }
 
 @Composable
-private fun MessageBubble(message: BixMessage, onSpeak: (String) -> Unit, onCopy: (String) -> Unit) {
+private fun MessageBubble(message: BixMessage, onCopy: (String) -> Unit) {
     val user = message.sender == "user"
     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (user) Arrangement.End else Arrangement.Start) {
         Column(Modifier.widthIn(max = 330.dp).clip(RoundedCornerShape(18.dp)).background(if (user) Color(0xFF17344A) else Panel)
@@ -698,8 +702,143 @@ private fun MessageBubble(message: BixMessage, onSpeak: (String) -> Unit, onCopy
             Spacer(Modifier.height(5.dp))
             Text(message.text.ifBlank { "..." }, color = White, fontSize = 14.sp, lineHeight = 20.sp)
             if (!user && message.text.isNotBlank()) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                IconButton(onClick = { onSpeak(message.text) }, modifier = Modifier.size(28.dp)) { Icon(Icons.Filled.VolumeUp, "Speak", tint = Muted, modifier = Modifier.size(17.dp)) }
                 IconButton(onClick = { onCopy(message.text) }, modifier = Modifier.size(28.dp)) { Icon(Icons.Filled.ContentCopy, "Copy response", tint = Muted, modifier = Modifier.size(16.dp)) }
+            }
+        }
+    }
+}
+
+
+@Composable
+private fun LiveVoiceDialog(
+    apiKey: String,
+    onAction: (BixAction) -> String,
+    onClose: () -> Unit
+) {
+    val context = LocalContext.current
+    val uiScope = rememberCoroutineScope()
+    var state by remember { mutableStateOf("Preparing microphone...") }
+    var error by remember { mutableStateOf("") }
+    val transcript = remember { mutableStateListOf<String>() }
+
+    val live = remember(apiKey) {
+        GeminiLiveVoiceSession(
+            context = context,
+            apiKey = apiKey,
+            onState = { next -> uiScope.launch(Dispatchers.Main) { state = next } },
+            onTranscript = { line ->
+                uiScope.launch(Dispatchers.Main) {
+                    transcript.add(line)
+                    while (transcript.size > 40) transcript.removeAt(0)
+                }
+            },
+            onError = { message -> uiScope.launch(Dispatchers.Main) { error = message } },
+            onAction = onAction
+        )
+    }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) live.start() else error = "Live voice ke liye microphone permission zaroori hai."
+    }
+
+    LaunchedEffect(live) {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            live.start()
+        } else {
+            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    DisposableEffect(live) {
+        onDispose { live.stop() }
+    }
+
+    Dialog(
+        onDismissRequest = {
+            live.stop()
+            onClose()
+        },
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(Modifier.fillMaxSize(), color = Bg) {
+            Column(
+                Modifier.fillMaxSize().padding(horizontal = 22.dp, vertical = 18.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("BIXSIGMA LIVE", color = White, fontWeight = FontWeight.ExtraBold, fontSize = 17.sp, letterSpacing = 1.2.sp)
+                        Text("GEMINI REAL-TIME VOICE", color = Cyan, fontSize = 9.sp, letterSpacing = 1.2.sp)
+                    }
+                    TextButton(onClick = {
+                        live.stop()
+                        onClose()
+                    }) { Text("CLOSE", color = Muted, fontWeight = FontWeight.Bold) }
+                }
+
+                Spacer(Modifier.height(28.dp))
+                Box(
+                    Modifier.size(176.dp).clip(CircleShape)
+                        .background(PanelAlt)
+                        .border(2.dp, Cyan.copy(alpha = 0.8f), CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("BΣ", color = Cyan, fontSize = 48.sp, fontWeight = FontWeight.Black)
+                        Text("LIVE", color = White, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 2.sp)
+                    }
+                }
+                Spacer(Modifier.height(22.dp))
+                Text(
+                    state,
+                    color = if (state.contains("Listening") || state.contains("speaking")) Cyan else White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Speak naturally. BixSigma will listen and reply with Gemini-generated voice.",
+                    color = Muted,
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+                if (error.isNotBlank()) {
+                    Spacer(Modifier.height(10.dp))
+                    AuthMessage(error, isError = true)
+                }
+                Spacer(Modifier.height(18.dp))
+                LazyColumn(
+                    Modifier.weight(1f).fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Panel).padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(9.dp)
+                ) {
+                    if (transcript.isEmpty()) {
+                        item {
+                            Text("Conversation transcript will appear here when Gemini sends speech transcription.", color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
+                        }
+                    }
+                    items(transcript) { line ->
+                        Text(line, color = if (line.startsWith("You:")) Color(0xFF9CCFF7) else White, fontSize = 12.sp, lineHeight = 17.sp)
+                    }
+                }
+                Spacer(Modifier.height(18.dp))
+                Button(
+                    onClick = {
+                        live.stop()
+                        onClose()
+                    },
+                    modifier = Modifier.fillMaxWidth().height(54.dp),
+                    shape = RoundedCornerShape(18.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFB83C52), contentColor = White)
+                ) {
+                    Icon(Icons.Filled.CallEnd, contentDescription = null)
+                    Spacer(Modifier.width(9.dp))
+                    Text("END CONVERSATION", fontWeight = FontWeight.ExtraBold)
+                }
+                Spacer(Modifier.height(10.dp))
             }
         }
     }
