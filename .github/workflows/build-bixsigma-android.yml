@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'source/BixSigmaAndroid.zip.b64.part*'
+      - 'source/BixSigmaApp-v1.0.1.kt.gz.b64'
       - '.github/workflows/build-bixsigma-android.yml'
   workflow_dispatch:
 
@@ -60,6 +61,37 @@ jobs:
           test -f BixSigmaAndroid/settings.gradle.kts
           test -f BixSigmaAndroid/app/src/main/AndroidManifest.xml
 
+      - name: Apply mobile-first scrollable setup and usability updates
+        shell: bash
+        run: |
+          set -euo pipefail
+          UI_FILE="BixSigmaAndroid/app/src/main/java/ai/bixsigma/mobile/ui/BixSigmaApp.kt"
+          base64 --decode source/BixSigmaApp-v1.0.1.kt.gz.b64 | gzip -dc > "$UI_FILE"
+          grep -q 'verticalScroll(scrollState)' "$UI_FILE"
+          grep -q 'SCROLL DOWN TO COMPLETE SETUP' "$UI_FILE"
+          sed -i 's/versionCode = 1/versionCode = 2/; s/versionName = "1.0.0"/versionName = "1.0.1"/' BixSigmaAndroid/app/build.gradle.kts
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("BixSigmaAndroid/app/src/main/java/ai/bixsigma/mobile/MainActivity.kt")
+          s = p.read_text()
+          s = s.replace(
+              "import android.os.Bundle",
+              "import android.graphics.Color as AndroidColor\nimport android.os.Bundle\nimport android.view.WindowManager"
+          )
+          s = s.replace(
+              "super.onCreate(savedInstanceState)\n",
+              "super.onCreate(savedInstanceState)\n"
+              "        window.statusBarColor = AndroidColor.rgb(7, 11, 22)\n"
+              "        window.navigationBarColor = AndroidColor.rgb(7, 11, 22)\n"
+              "        window.decorView.systemUiVisibility = 0\n"
+              "        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)\n"
+          )
+          p.write_text(s)
+          PY
+          grep -q 'SOFT_INPUT_ADJUST_RESIZE' BixSigmaAndroid/app/src/main/java/ai/bixsigma/mobile/MainActivity.kt
+          grep -q 'versionCode = 2' BixSigmaAndroid/app/build.gradle.kts
+          grep -q 'versionName = "1.0.1"' BixSigmaAndroid/app/build.gradle.kts
+
       - name: Build Debug APK
         run: gradle -p BixSigmaAndroid :app:assembleDebug --stacktrace --no-daemon
 
@@ -81,7 +113,7 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="$(sed -n 's/.*versionName = "\(.*\)".*/\1/p' BixSigmaAndroid/app/build.gradle.kts | head -n 1)"
-          if [ -z "$VERSION" ]; then VERSION="1.0.0"; fi
+          if [ -z "$VERSION" ]; then VERSION="1.0.1"; fi
           mkdir -p releases
           cp "${{ steps.verify.outputs.apk_path }}" "releases/BixSigmaAI-v${VERSION}-debug.apk"
           cp "${{ steps.verify.outputs.apk_path }}" releases/BixSigmaAI-latest.apk
