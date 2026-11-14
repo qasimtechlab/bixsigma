@@ -19,6 +19,10 @@
         <package android:name="com.dts.freefiremax" />
         <package android:name="com.discord" />
         <package android:name="com.android.vending" />
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
     </queries>
     <application
         android:allowBackup="false"
