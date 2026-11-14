@@ -15,6 +15,8 @@ class AndroidActionExecutor(private val context: Context) {
         return try {
             when (action.type.lowercase()) {
                 "open_app" -> openApp(action.appName.orEmpty(), action.query)
+                "open_settings" -> openSettings(action.title.orEmpty())
+                "send_sms" -> prepareSms(action.phoneNumber, action.message)
                 "open_website" -> openWebsite(action.url.orEmpty())
                 "phone_call" -> dialPhone(action.phoneNumber, action.contactName, action.callType)
                 "youtube_play" -> openYouTube(action.query)
@@ -76,10 +78,55 @@ class AndroidActionExecutor(private val context: Context) {
                 context.startActivity(launch)
                 return "$rawName open kar diya gaya hai."
             }
-            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$packageName")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            return "$rawName install nahi hai; Play Store page khol diya gaya hai."
         }
-        return "\"$rawName\" ke liye native app integration abhi available nahi. Google search automatically open nahi ki gayi."
+        // Resolve any other installed launcher app by the label actually shown on the phone.
+        val wanted = rawName.lowercase(Locale.ROOT).replace(Regex("[^a-z0-9]"), "")
+        val launcherIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        val matches = context.packageManager.queryIntentActivities(launcherIntent, 0)
+        val match = matches.firstOrNull { info ->
+            val label = info.loadLabel(context.packageManager).toString().lowercase(Locale.ROOT)
+                .replace(Regex("[^a-z0-9]"), "")
+            label == wanted || label.contains(wanted) || wanted.contains(label)
+        }
+        if (match != null) {
+            val launch = context.packageManager.getLaunchIntentForPackage(match.activityInfo.packageName)
+            if (launch != null) {
+                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(launch)
+                return "$rawName open kar diya gaya hai."
+            }
+        }
+        if (packageName != null) {
+            return "$rawName install nahi hai. Play Store se install kar sakte ho."
+        }
+        return "\"$rawName\" naam ki app installed launcher list mein nahi mili. App ka exact display name batao."
+    }
+
+    private fun openSettings(section: String): String {
+        val normalized = section.lowercase(Locale.ROOT)
+        val action = when {
+            normalized.contains("wifi") || normalized.contains("wi-fi") || normalized.contains("network") -> android.provider.Settings.ACTION_WIFI_SETTINGS
+            normalized.contains("bluetooth") -> android.provider.Settings.ACTION_BLUETOOTH_SETTINGS
+            normalized.contains("display") || normalized.contains("screen") -> android.provider.Settings.ACTION_DISPLAY_SETTINGS
+            normalized.contains("sound") || normalized.contains("volume") -> android.provider.Settings.ACTION_SOUND_SETTINGS
+            normalized.contains("location") || normalized.contains("gps") -> android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS
+            normalized.contains("battery") -> android.provider.Settings.ACTION_BATTERY_SAVER_SETTINGS
+            normalized.contains("app") || normalized.contains("application") -> android.provider.Settings.ACTION_MANAGE_APPLICATIONS_SETTINGS
+            normalized.contains("accessibility") -> android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS
+            else -> android.provider.Settings.ACTION_SETTINGS
+        }
+        context.startActivity(Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        return "Phone ki $section settings khol di hain. System setting tum khud confirm/change kar sakte ho."
+    }
+
+    private fun prepareSms(number: String?, message: String?): String {
+        val clean = (number ?: "").trim()
+        if (clean.isBlank()) return "SMS recipient ka phone number missing hai."
+        val intent = Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:${Uri.encode(clean)}"))
+            .putExtra("sms_body", message.orEmpty())
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        context.startActivity(intent)
+        return "SMS draft khol diya hai. Message check karke Send tum khud dabana."
     }
 
     private fun openWebsite(rawUrl: String): String {
