@@ -7,6 +7,7 @@ on:
       - 'source/BixSigmaAndroid.zip.b64.part*'
       - 'source/BixSigmaApp-v1.0.1.kt'
       - 'source/BixSigmaApp-v1.0.1.kt.gz.b64'
+      - 'android-source/**'
       - '.github/workflows/build-bixsigma-android.yml'
   workflow_dispatch:
 
@@ -62,59 +63,26 @@ jobs:
           test -f BixSigmaAndroid/settings.gradle.kts
           test -f BixSigmaAndroid/app/src/main/AndroidManifest.xml
 
-      - name: Apply mobile-first scrollable setup and usability updates
+      - name: Apply mobile-first, direct Gemini and Live Voice native sources
         shell: bash
         run: |
           set -euo pipefail
-          UI_FILE="BixSigmaAndroid/app/src/main/java/ai/bixsigma/mobile/ui/BixSigmaApp.kt"
-          if [ -s source/BixSigmaApp-v1.0.1.kt ]; then
-            cp source/BixSigmaApp-v1.0.1.kt "$UI_FILE"
-          else
-            base64 --decode source/BixSigmaApp-v1.0.1.kt.gz.b64 | gzip -dc > "$UI_FILE"
-          fi
-          # Keep the old bootstrap patch idempotent while moving the real UI source into plain Kotlin.
-          sed -i 's/, single = true, secret = true/, secret = true/; s/, single = true, keyboard = KeyboardType.Uri/, keyboard = KeyboardType.Uri/' "$UI_FILE"
-          ! grep -q 'single = true' "$UI_FILE"
-          grep -q 'verticalScroll(scrollState)' "$UI_FILE"
-          grep -q 'SCROLL DOWN TO COMPLETE SETUP' "$UI_FILE"
-          grep -q 'focusManager.moveFocus(FocusDirection.Down)' "$UI_FILE"
-          grep -q 'chatListState.scrollToItem(messages.lastIndex)' "$UI_FILE"
-          grep -q 'Response copied to clipboard.' "$UI_FILE"
-          grep -q 'heightIn(max = 340.dp)' "$UI_FILE"
-          mkdir -p source
-          cp "$UI_FILE" source/BixSigmaApp-v1.0.1.kt
-          # Use a separate preview package: the previous CI debug APK was signed with a different ephemeral key.
-          sed -i 's/versionCode = 1/versionCode = 2/; s/versionName = "1.0.0"/versionName = "1.0.2"/; s/versionName = "1.0.1"/versionName = "1.0.2"/; s/applicationIdSuffix = ".debug"/applicationIdSuffix = ".preview"/' BixSigmaAndroid/app/build.gradle.kts
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path("BixSigmaAndroid/app/src/main/java/ai/bixsigma/mobile/MainActivity.kt")
-          s = p.read_text()
-          s = s.replace(
-              "import android.os.Bundle",
-              "import android.graphics.Color as AndroidColor\nimport android.os.Bundle\nimport android.view.WindowManager"
-          )
-          s = s.replace(
-              "super.onCreate(savedInstanceState)\n",
-              "super.onCreate(savedInstanceState)\n"
-              "        window.statusBarColor = AndroidColor.rgb(7, 11, 22)\n"
-              "        window.navigationBarColor = AndroidColor.rgb(7, 11, 22)\n"
-              "        window.decorView.systemUiVisibility = 0\n"
-              "        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)\n"
-          )
-          p.write_text(s)
-          PY
-          grep -q 'SOFT_INPUT_ADJUST_RESIZE' BixSigmaAndroid/app/src/main/java/ai/bixsigma/mobile/MainActivity.kt
-          grep -q 'versionCode = 2' BixSigmaAndroid/app/build.gradle.kts
-          grep -q 'versionName = "1.0.2"' BixSigmaAndroid/app/build.gradle.kts
-          # Publish the native app sources as readable files so later changes are made against the real project.
-          rm -rf android-source
-          mkdir -p android-source/app/src/main
-          cp -R BixSigmaAndroid/app/src/main/java android-source/app/src/main/
-          cp -R BixSigmaAndroid/app/src/main/res android-source/app/src/main/ 2>/dev/null || true
-          cp BixSigmaAndroid/app/src/main/AndroidManifest.xml android-source/app/src/main/
-          cp BixSigmaAndroid/app/build.gradle.kts android-source/app/
-          cp BixSigmaAndroid/settings.gradle.kts android-source/
-          cp BixSigmaAndroid/build.gradle.kts android-source/ 2>/dev/null || true
+          test -f android-source/app/src/main/java/ai/bixsigma/mobile/ui/BixSigmaApp.kt
+          test -f android-source/app/src/main/java/ai/bixsigma/mobile/data/BixApiClient.kt
+          test -f android-source/app/src/main/java/ai/bixsigma/mobile/data/GeminiLiveVoiceSession.kt
+          test -f android-source/app/src/main/java/ai/bixsigma/mobile/actions/AndroidActionExecutor.kt
+          # Readable app source in android-source is canonical; do not restore the stale backend URL UI.
+          cp -R android-source/app/src/main/. BixSigmaAndroid/app/src/main/
+          cp android-source/app/build.gradle.kts BixSigmaAndroid/app/build.gradle.kts
+          grep -q 'verticalScroll(scrollState)' BixSigmaAndroid/app/src/main/java/ai/bixsigma/mobile/ui/BixSigmaApp.kt
+          grep -q 'GET YOUR TOKEN' BixSigmaAndroid/app/src/main/java/ai/bixsigma/mobile/ui/BixSigmaApp.kt
+          grep -q 'GeminiLiveVoiceSession' BixSigmaAndroid/app/src/main/java/ai/bixsigma/mobile/ui/BixSigmaApp.kt
+          grep -q 'api.checkApiKey' BixSigmaAndroid/app/src/main/java/ai/bixsigma/mobile/ui/BixSigmaApp.kt
+          ! grep -q 'backendUrl' BixSigmaAndroid/app/src/main/java/ai/bixsigma/mobile/ui/BixSigmaApp.kt
+          grep -q 'RECORD_AUDIO' BixSigmaAndroid/app/src/main/AndroidManifest.xml
+          sed -i 's/versionCode = 2/versionCode = 3/; s/versionName = "1.0.2"/versionName = "1.0.3"/' BixSigmaAndroid/app/build.gradle.kts
+          grep -q 'versionCode = 3' BixSigmaAndroid/app/build.gradle.kts
+          grep -q 'versionName = "1.0.3"' BixSigmaAndroid/app/build.gradle.kts
 
       - name: Build Debug APK
         run: gradle -p BixSigmaAndroid :app:assembleDebug --stacktrace --no-daemon
@@ -137,7 +105,7 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="$(sed -n 's/.*versionName = "\(.*\)".*/\1/p' BixSigmaAndroid/app/build.gradle.kts | head -n 1)"
-          if [ -z "$VERSION" ]; then VERSION="1.0.2"; fi
+          if [ -z "$VERSION" ]; then VERSION="1.0.3"; fi
           mkdir -p releases
           cp "${{ steps.verify.outputs.apk_path }}" "releases/BixSigmaAI-v${VERSION}-debug.apk"
           cp "${{ steps.verify.outputs.apk_path }}" releases/BixSigmaAI-latest.apk
@@ -147,11 +115,16 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add releases/ source/BixSigmaApp-v1.0.1.kt android-source/
+          # Sync the exact native project sources that were built back to the readable source tree.
+          rm -rf android-source/app/src/main
+          mkdir -p android-source/app/src/main
+          cp -R BixSigmaAndroid/app/src/main/. android-source/app/src/main/
+          cp BixSigmaAndroid/app/build.gradle.kts android-source/app/build.gradle.kts
+          git add releases/ android-source/
           if git diff --cached --quiet; then
             echo "APK output and source unchanged; no release commit needed."
           else
-            git commit -m "build: publish BixSigma AI v${VERSION} debug APK and native project sources"
+            git commit -m "build: publish BixSigma AI v${VERSION} debug APK and direct Gemini native sources"
             git fetch origin "${GITHUB_REF_NAME}"
             git rebase "origin/${GITHUB_REF_NAME}"
             git push origin "HEAD:${GITHUB_REF_NAME}"
