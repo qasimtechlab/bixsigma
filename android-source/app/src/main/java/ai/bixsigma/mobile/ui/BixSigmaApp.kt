@@ -631,6 +631,14 @@ private fun ChatScreen(account: BixAccount, settings: SettingsStore, firebase: F
     if (showVoice) LiveVoiceDialog(
         apiKey = settings.apiKey,
         onAction = { action -> executor.execute(action).also { result -> scope.launch(Dispatchers.Main) { notice = result } } },
+        onConversationLine = { line ->
+            val speaker = line.substringBefore(':').trim()
+            val spokenText = line.substringAfter(':', line).trim()
+            if (spokenText.isNotBlank()) {
+                messages.add(BixMessage(sender = if (speaker.equals("You", true)) "user" else "bix", text = spokenText))
+                settings.saveChatMessages(account.uid, messages.toList())
+            }
+        },
         onClose = { showVoice = false }
     )
 
@@ -713,15 +721,17 @@ private fun MessageBubble(message: BixMessage, onCopy: (String) -> Unit) {
 private fun LiveVoiceDialog(
     apiKey: String,
     onAction: (BixAction) -> String,
+    onConversationLine: (String) -> Unit,
     onClose: () -> Unit
 ) {
     val context = LocalContext.current
     val uiScope = rememberCoroutineScope()
     var state by remember { mutableStateOf("Preparing microphone...") }
     var error by remember { mutableStateOf("") }
+    var sessionAttempt by remember { mutableIntStateOf(0) }
     val transcript = remember { mutableStateListOf<String>() }
 
-    val live = remember(apiKey) {
+    val live = remember(apiKey, sessionAttempt) {
         GeminiLiveVoiceSession(
             context = context,
             apiKey = apiKey,
@@ -729,10 +739,11 @@ private fun LiveVoiceDialog(
             onTranscript = { line ->
                 uiScope.launch(Dispatchers.Main) {
                     transcript.add(line)
+                    onConversationLine(line)
                     while (transcript.size > 40) transcript.removeAt(0)
                 }
             },
-            onError = { message -> uiScope.launch(Dispatchers.Main) { error = message } },
+            onError = { message -> uiScope.launch(Dispatchers.Main) { error = message; state = "Disconnected" } },
             onAction = onAction
         )
     }
@@ -809,6 +820,20 @@ private fun LiveVoiceDialog(
                 if (error.isNotBlank()) {
                     Spacer(Modifier.height(10.dp))
                     AuthMessage(error, isError = true)
+                    Spacer(Modifier.height(8.dp))
+                    Button(
+                        onClick = {
+                            error = ""
+                            state = "Reconnecting to Gemini Live..."
+                            transcript.clear()
+                            sessionAttempt++
+                        },
+                        modifier = Modifier.fillMaxWidth().height(44.dp),
+                        shape = RoundedCornerShape(13.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = PanelAlt, contentColor = Cyan)
+                    ) {
+                        Text("RETRY VOICE CONNECTION", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
                 }
                 Spacer(Modifier.height(18.dp))
                 LazyColumn(
