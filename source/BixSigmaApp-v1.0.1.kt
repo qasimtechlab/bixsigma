@@ -13,6 +13,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -28,6 +29,7 @@ import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -36,6 +38,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -427,6 +433,7 @@ private fun DarkField(
     keyboard: KeyboardType = KeyboardType.Text,
     imeAction: ImeAction = ImeAction.Next
 ) {
+    val focusManager = LocalFocusManager.current
     OutlinedTextField(
         value = value,
         onValueChange = onChange,
@@ -450,6 +457,10 @@ private fun DarkField(
             keyboardType = keyboard,
             imeAction = imeAction
         ),
+        keyboardActions = KeyboardActions(
+            onNext = { focusManager.moveFocus(FocusDirection.Down) },
+            onDone = { focusManager.clearFocus() }
+        ),
         colors = OutlinedTextFieldDefaults.colors(
             focusedBorderColor = Cyan,
             unfocusedBorderColor = Color(0xFF34445B),
@@ -468,6 +479,8 @@ private fun ChatScreen(account: BixAccount, settings: SettingsStore, firebase: F
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val executor = remember { AndroidActionExecutor(context) }
+    val chatListState = rememberLazyListState()
+    val clipboardManager = LocalClipboardManager.current
     val messages = remember(account.uid) {
         mutableStateListOf<BixMessage>().apply {
             val restored = settings.loadChatMessages(account.uid)
@@ -480,11 +493,17 @@ private fun ChatScreen(account: BixAccount, settings: SettingsStore, firebase: F
     var errorText by remember { mutableStateOf("") }
     var notice by remember { mutableStateOf("") }
     var showSettings by remember { mutableStateOf(false) }
+    var settingsBusy by remember { mutableStateOf(false) }
+    var showSettingsKey by remember { mutableStateOf(false) }
     var key by remember { mutableStateOf(settings.apiKey) }
     var backend by remember { mutableStateOf(settings.backendUrl) }
     var ttsReady by remember { mutableStateOf(false) }
     val tts = remember { TextToSpeech(context) { status -> ttsReady = status == TextToSpeech.SUCCESS } }
     DisposableEffect(Unit) { onDispose { tts.stop(); tts.shutdown() } }
+
+    LaunchedEffect(messages.size, messages.lastOrNull()?.text) {
+        if (messages.isNotEmpty()) chatListState.scrollToItem(messages.lastIndex)
+    }
 
     val speechLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == android.app.Activity.RESULT_OK) input = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull().orEmpty()
@@ -550,7 +569,7 @@ private fun ChatScreen(account: BixAccount, settings: SettingsStore, firebase: F
         }
     }
 
-    Column(Modifier.fillMaxSize().background(Bg)) {
+    Column(Modifier.fillMaxSize().background(Bg).imePadding().navigationBarsPadding()) {
         Row(Modifier.fillMaxWidth().background(Panel).padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(40.dp).clip(CircleShape).background(PanelAlt).border(1.dp, Cyan, CircleShape), contentAlignment = Alignment.Center) { Text("BΣ", color = Cyan, fontWeight = FontWeight.Black) }
             Spacer(Modifier.width(10.dp))
@@ -558,16 +577,28 @@ private fun ChatScreen(account: BixAccount, settings: SettingsStore, firebase: F
                 Text("BixSigma AI", color = White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
                 Text("MOBILE INTELLIGENCE • ONLINE", color = Cyan, fontSize = 9.sp, letterSpacing = 1.sp)
             }
-            IconButton(onClick = { showSettings = true }) { Icon(Icons.Filled.Settings, "Settings", tint = Muted) }
+            IconButton(onClick = { showSettings = true; errorText = "" }) { Icon(Icons.Filled.Settings, "Settings", tint = Muted) }
             IconButton(onClick = onLogout) { Icon(Icons.Filled.Logout, "Logout", tint = Muted) }
         }
         if (notice.isNotBlank()) Row(Modifier.fillMaxWidth().background(Color(0xFF0D2430)).padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(notice, Modifier.weight(1f), color = Cyan, fontSize = 11.sp)
             TextButton(onClick = { notice = "" }) { Text("OK", color = Cyan) }
         }
-        LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(13.dp), verticalArrangement = Arrangement.spacedBy(11.dp)) {
+        LazyColumn(
+            state = chatListState,
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            contentPadding = PaddingValues(13.dp),
+            verticalArrangement = Arrangement.spacedBy(11.dp)
+        ) {
             items(messages, key = { it.id }) { item ->
-                MessageBubble(item) { text -> if (ttsReady) tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, item.id) }
+                MessageBubble(
+                    message = item,
+                    onSpeak = { text -> if (ttsReady) tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, item.id) },
+                    onCopy = { text ->
+                        clipboardManager.setText(AnnotatedString(text))
+                        notice = "Response copied to clipboard."
+                    }
+                )
             }
             if (busy) item { Text("BixSigma soch raha hai...", color = Cyan, fontSize = 11.sp) }
         }
@@ -603,23 +634,62 @@ private fun ChatScreen(account: BixAccount, settings: SettingsStore, firebase: F
     if (showSettings) AlertDialog(
         onDismissRequest = { showSettings = false },
         title = { Text("BixSigma Settings", color = White) },
-        text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            DarkField(key, { key = it }, "Gemini API key", secret = true)
-            DarkField(backend, { backend = it }, "Backend URL", keyboard = KeyboardType.Uri)
-            Text("API key encrypted storage mein save hoti hai. Backend par /api/health endpoint required hai.", color = Muted, fontSize = 10.sp)
-        } },
-        confirmButton = { TextButton(onClick = { scope.launch {
-            runCatching { api.checkBackend(backend) }.onSuccess { status ->
-                settings.apiKey = key.trim(); settings.backendUrl = backend.trim(); showSettings = false; notice = "Settings saved. Backend: $status"
-            }.onFailure { errorText = it.message ?: "Backend check failed" }
-        } }) { Text("SAVE & TEST", color = Cyan) } },
+        text = {
+            Column(
+                Modifier.fillMaxWidth().heightIn(max = 340.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                DarkField(
+                    key, { key = it }, "Gemini API key",
+                    secret = true,
+                    secretVisible = showSettingsKey,
+                    onToggleSecret = { showSettingsKey = !showSettingsKey },
+                    keyboard = KeyboardType.Ascii
+                )
+                DarkField(backend, { backend = it }, "Backend URL", keyboard = KeyboardType.Uri)
+                if (errorText.isNotBlank()) AuthMessage(errorText, isError = true)
+                Text("API key encrypted storage mein save hoti hai. Backend par /api/health endpoint required hai.", color = Muted, fontSize = 10.sp)
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = !settingsBusy,
+                onClick = {
+                    errorText = ""
+                    if (key.isBlank() || backend.isBlank()) {
+                        errorText = "Gemini API key aur backend URL dono zaroori hain."
+                    } else {
+                        settingsBusy = true
+                        scope.launch {
+                            try {
+                                val status = api.checkBackend(backend.trim())
+                                if (!status.equals("ok", ignoreCase = true)) {
+                                    throw IllegalStateException("Backend ne expected OK status return nahi kiya.")
+                                }
+                                settings.apiKey = key.trim()
+                                settings.backendUrl = backend.trim()
+                                showSettings = false
+                                notice = "Settings saved. Backend: $status"
+                            } catch (e: Exception) {
+                                errorText = e.message ?: "Backend check failed"
+                            } finally {
+                                settingsBusy = false
+                            }
+                        }
+                    }
+                }
+            ) {
+                if (settingsBusy) CircularProgressIndicator(Modifier.size(16.dp), color = Cyan, strokeWidth = 2.dp)
+                else Text("SAVE & TEST", color = Cyan)
+            }
+        },
         dismissButton = { TextButton(onClick = { showSettings = false }) { Text("CANCEL", color = Muted) } },
         containerColor = Panel
     )
 }
 
 @Composable
-private fun MessageBubble(message: BixMessage, onSpeak: (String) -> Unit) {
+private fun MessageBubble(message: BixMessage, onSpeak: (String) -> Unit, onCopy: (String) -> Unit) {
     val user = message.sender == "user"
     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (user) Arrangement.End else Arrangement.Start) {
         Column(Modifier.widthIn(max = 330.dp).clip(RoundedCornerShape(18.dp)).background(if (user) Color(0xFF17344A) else Panel)
@@ -629,6 +699,7 @@ private fun MessageBubble(message: BixMessage, onSpeak: (String) -> Unit) {
             Text(message.text.ifBlank { "..." }, color = White, fontSize = 14.sp, lineHeight = 20.sp)
             if (!user && message.text.isNotBlank()) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 IconButton(onClick = { onSpeak(message.text) }, modifier = Modifier.size(28.dp)) { Icon(Icons.Filled.VolumeUp, "Speak", tint = Muted, modifier = Modifier.size(17.dp)) }
+                IconButton(onClick = { onCopy(message.text) }, modifier = Modifier.size(28.dp)) { Icon(Icons.Filled.ContentCopy, "Copy response", tint = Muted, modifier = Modifier.size(16.dp)) }
             }
         }
     }
