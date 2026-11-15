@@ -126,7 +126,7 @@ class BixApiClient {
 
         cachedKeyFingerprint = hash
         cachedTextModel = selected
-        selected
+        return selected
     }
 
     private fun formatApiError(code: Int, data: JSONObject?, raw: String): String {
