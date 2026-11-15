@@ -105,13 +105,9 @@ class BixApiClient {
         }
 
         val preferences = listOf(
-            TEXT_MODEL,
-            "gemini-3.7-flash",
-            "gemini-3.6-flash",
-            "gemini-3.5-flash",
-            "gemini-3.5-flash-lite",
-            "gemini-2.5-flash",
-            "gemini-2.5-flash-lite"
+            TEXT_MODEL, FALLBACK_TEXT_MODEL, "gemini-3.8-flash",
+            "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
+            "gemini-3.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-flash-lite"
         )
         val selected = preferences.firstOrNull { it in available }
             ?: available.firstOrNull { it.contains("flash", ignoreCase = true) }
@@ -223,11 +219,11 @@ class BixApiClient {
                 put("generationConfig", JSONObject()
                     .put("temperature", 0.72)
                     .put("topP", 0.92)
-                    .put("maxOutputTokens", 1200)
-                    .put("thinkingConfig", if (selectedModel.startsWith("gemini-2.5")) {
-                        JSONObject().put("thinkingBudget", 0)
-                    } else {
-                        JSONObject().put("thinkingLevel", "low")
+                    .put("maxOutputTokens", 4096)
+                    .put("thinkingConfig", when {
+                        selectedModel == TEXT_MODEL -> JSONObject().put("thinkingLevel", "medium")
+                        selectedModel.startsWith("gemini-2.5") -> JSONObject().put("thinkingBudget", 0)
+                        else -> JSONObject().put("thinkingLevel", "low")
                     }))
             }
             val response = executeGenerate(key, requestBody, selectedModel)
@@ -299,17 +295,29 @@ class BixApiClient {
     }
 
     private fun systemInstruction(userName: String) = """
-        You are BixSigma AI, a capable, accurate and friendly professional Android assistant.
-        Your creator is Mirza Qasim (Qasim Mirza) from Faisalabad, Pakistan. If asked who created you,
-        answer clearly: "BixSigma AI was created and developed by Mirza Qasim from Faisalabad, Pakistan."
-        Address the user naturally without repeatedly using their name.
-        Match the user's language. For Urdu/Hindi users, prefer easy, natural Roman Urdu unless they use another script and clearly prefer it.
-        Give useful, specific, direct answers. Avoid filler, fake confidence, excessive disclaimers and long internal deliberation.
-        For simple questions answer quickly in a few clear sentences. For difficult tasks, reason carefully but show only the useful result.
-        Do not search Google for every question. Use your own knowledge first; use a device action only when it directly fulfils the user's request.
-        Never pretend an Android action succeeded: call the relevant function and report its returned result.
-        Ask one short clarification only when an essential detail is missing. Do not invent current facts, phone status, installed apps, prices or events.
-        The signed-in user's display name is ${userName.ifBlank { "the user" }}.
+        IDENTITY:
+        You are Bix Sigma AI, an advanced conversational intelligence created by Mirza Qasim in Faisalabad, Pakistan.
+        The signed-in user's display name is ${userName.ifBlank { "Friend" }}.
+        If asked about your creator, credit Mirza Qasim from Faisalabad, Pakistan. Do not claim to be human.
+
+        RESPONSE STYLE:
+        - Answer directly, naturally and confidently. Avoid unnecessary greetings, filler and repetitive disclaimers.
+        - Match the user's language and script. Support English, Urdu, Roman Urdu, Hindi and Punjabi.
+        - Keep simple answers concise; structure detailed technical answers with clear headings and steps.
+        - Be warm, professional and conversational.
+
+        REASONING AND ACCURACY:
+        - Use your own knowledge and reasoning first. Do not open Google or a browser for ordinary questions.
+        - For current facts, use built-in Google Search grounding silently when appropriate.
+        - Never invent live facts, prices, dates, statistics, installed-app status or action results.
+        - If information cannot be verified, say so clearly.
+        - Provide useful solutions for coding, mathematics, science and analysis.
+
+        ANDROID ACTIONS:
+        - Use native Android tools only when the user requests an action or it directly fulfils the request.
+        - Never claim an action succeeded until Android returns success.
+        - Calls, SMS and calendar events must remain user-confirmed in the relevant Android app.
+        - If an app cannot be found or an action fails, explain the actual result.
     """.trimIndent()
 
     private fun deviceTools(): JSONArray {
@@ -349,7 +357,9 @@ class BixApiClient {
             "description" to prop("STRING", "Event details"),
             "location" to prop("STRING", "Event location")
         ), arrayOf("startTime", "endTime", "title")))
-        return JSONArray().put(JSONObject().put("functionDeclarations", declarations))
+        return JSONArray()
+            .put(JSONObject().put("googleSearch", JSONObject()))
+            .put(JSONObject().put("functionDeclarations", declarations))
     }
 
     private fun functionDeclaration(name: String, description: String, properties: JSONObject, required: Array<String>) =
@@ -378,8 +388,10 @@ class BixApiClient {
 
     companion object {
         const val API_BASE = "https://generativelanguage.googleapis.com"
-        const val TEXT_MODEL = "gemini-3.8-flash"
+        const val TEXT_MODEL = "gemini-4-hydrogen"
+        const val FALLBACK_TEXT_MODEL = "gemini-3.1-flash-lite"
         const val LIVE_MODEL = "gemini-3.8-live"
+        const val FALLBACK_LIVE_MODEL = "gemini-3.1-flash-live-preview"
         const val TOKEN_URL = "https://aistudio.google.com/apikey"
     }
 }
