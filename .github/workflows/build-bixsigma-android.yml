@@ -93,10 +93,16 @@ jobs:
           grep -q 'list_apps' BixSigmaAndroid/app/src/main/java/ai/bixsigma/mobile/actions/AndroidActionExecutor.kt
           grep -q 'onConversationLine' BixSigmaAndroid/app/src/main/java/ai/bixsigma/mobile/ui/BixSigmaApp.kt
           grep -q 'RETRY VOICE CONNECTION' BixSigmaAndroid/app/src/main/java/ai/bixsigma/mobile/ui/BixSigmaApp.kt
+          grep -q 'models?pageSize=100' BixSigmaAndroid/app/src/main/java/ai/bixsigma/mobile/data/BixApiClient.kt
+          grep -q 'callTimeout(40, TimeUnit.SECONDS)' BixSigmaAndroid/app/src/main/java/ai/bixsigma/mobile/data/BixApiClient.kt
+          grep -q 'call.timeout().timeout(12, TimeUnit.SECONDS)' BixSigmaAndroid/app/src/main/java/ai/bixsigma/mobile/data/BixApiClient.kt
+          grep -q 'Standard key September 2026' BixSigmaAndroid/app/src/main/java/ai/bixsigma/mobile/data/BixApiClient.kt
+          grep -q 'CHECKING TOKEN' BixSigmaAndroid/app/src/main/java/ai/bixsigma/mobile/ui/BixSigmaApp.kt
+          grep -q 'hard limit 12 seconds' BixSigmaAndroid/app/src/main/java/ai/bixsigma/mobile/ui/BixSigmaApp.kt
           test "$(grep -c 'android.intent.category.LAUNCHER' BixSigmaAndroid/app/src/main/AndroidManifest.xml)" -ge 2
-          sed -i 's/versionCode = 4/versionCode = 5/; s/versionName = "1.0.4"/versionName = "1.0.5"/' BixSigmaAndroid/app/build.gradle.kts
-          grep -q 'versionCode = 5' BixSigmaAndroid/app/build.gradle.kts
-          grep -q 'versionName = "1.0.5"' BixSigmaAndroid/app/build.gradle.kts
+          sed -i 's/versionCode = 5/versionCode = 6/; s/versionName = "1.0.5"/versionName = "1.0.6"/' BixSigmaAndroid/app/build.gradle.kts
+          grep -q 'versionCode = 6' BixSigmaAndroid/app/build.gradle.kts
+          grep -q 'versionName = "1.0.6"' BixSigmaAndroid/app/build.gradle.kts
 
       - name: Build Debug APK
         run: gradle -p BixSigmaAndroid :app:assembleDebug --stacktrace --no-daemon
@@ -119,7 +125,7 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="$(sed -n 's/.*versionName = "\(.*\)".*/\1/p' BixSigmaAndroid/app/build.gradle.kts | head -n 1)"
-          if [ -z "$VERSION" ]; then VERSION="1.0.5"; fi
+          if [ -z "$VERSION" ]; then VERSION="1.0.6"; fi
           mkdir -p releases
           cp "${{ steps.verify.outputs.apk_path }}" "releases/BixSigmaAI-v${VERSION}-debug.apk"
           cp "${{ steps.verify.outputs.apk_path }}" releases/BixSigmaAI-latest.apk
