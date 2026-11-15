@@ -9,6 +9,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
+import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 
 /**
@@ -18,25 +19,147 @@ import java.util.concurrent.TimeUnit
  */
 class BixApiClient {
     private val client = OkHttpClient.Builder()
-        .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
-        .writeTimeout(30, TimeUnit.SECONDS)
+        .connectTimeout(12, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(15, TimeUnit.SECONDS)
+        .callTimeout(40, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
         .build()
     private val jsonType = "application/json; charset=utf-8".toMediaType()
 
+    @Volatile private var cachedKeyFingerprint: String? = null
+    @Volatile private var cachedTextModel: String? = null
+
+    /**
+     * Verifies authentication using the lightweight Models API rather than spending
+     * a generation request just to check a token. It also selects a model that this
+     * exact key can call with generateContent.
+     */
     suspend fun checkApiKey(apiKey: String): String = withContext(Dispatchers.IO) {
-        val key = apiKey.trim()
-        if (key.isBlank()) throw IOException("Token khali hai. Google AI Studio se token paste karo.")
-        val body = JSONObject().apply {
-            put("contents", JSONArray().put(
-                JSONObject().put("role", "user").put("parts", JSONArray().put(JSONObject().put("text", "Reply only with OK.")))
-            ))
-            put("generationConfig", JSONObject().put("maxOutputTokens", 8).put("thinkingConfig", JSONObject().put("thinkingLevel", "low")))
+        val key = normalizeApiKey(apiKey)
+        if (key.isBlank()) throw IOException("Token khali hai. Google AI Studio se Auth API key paste karo.")
+        val model = resolveTextModel(key, forceRefresh = true)
+        "connected:$model"
+    }
+
+    private fun normalizeApiKey(value: String): String {
+        var key = value.trim()
+        if (key.length >= 2 && (
+                (key.first() == '"' && key.last() == '"') ||
+                (key.first() == '\'' && key.last() == '\'') ||
+                (key.first() == '`' && key.last() == '`')
+            )) {
+            key = key.substring(1, key.length - 1).trim()
         }
-        val result = executeGenerate(key, body)
-        val reply = extractText(result)
-        if (reply.isBlank()) throw IOException("Gemini ne empty verification response di.")
-        "connected"
+        return key.replace(Regex("\\s+"), "")
+    }
+
+    private fun fingerprint(key: String): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest(key.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+
+    private fun resolveTextModel(apiKey: String, forceRefresh: Boolean = false): String {
+        val key = normalizeApiKey(apiKey)
+        if (key.isBlank()) throw IOException("Gemini token missing hai.")
+        val hash = fingerprint(key)
+        if (!forceRefresh && cachedKeyFingerprint == hash && !cachedTextModel.isNullOrBlank()) {
+            return cachedTextModel!!
+        }
+
+        val request = Request.Builder()
+            .url("$API_BASE/v1beta/models?pageSize=100")
+            .header("x-goog-api-key", key)
+            .header("Accept", "application/json")
+            .get()
+            .build()
+
+        val call = client.newCall(request)
+        call.timeout().timeout(12, TimeUnit.SECONDS)
+        val responseData = call.execute().use { response ->
+            val raw = response.body?.string().orEmpty()
+            val data = runCatching { JSONObject(raw) }.getOrNull()
+            if (!response.isSuccessful) {
+                throw IOException(formatApiError(response.code, data, raw))
+            }
+            data ?: throw IOException("Google Gemini ne valid JSON response nahi di. Dobara try karo.")
+        }
+
+        val models = responseData.optJSONArray("models") ?: JSONArray()
+        val available = linkedSetOf<String>()
+        for (index in 0 until models.length()) {
+            val item = models.optJSONObject(index) ?: continue
+            val methods = item.optJSONArray("supportedGenerationMethods") ?: JSONArray()
+            var supportsGenerate = false
+            for (methodIndex in 0 until methods.length()) {
+                if (methods.optString(methodIndex) == "generateContent") {
+                    supportsGenerate = true
+                    break
+                }
+            }
+            if (!supportsGenerate) continue
+            val id = item.optString("baseModelId").ifBlank {
+                item.optString("name").removePrefix("models/")
+            }
+            if (id.isNotBlank()) available.add(id)
+        }
+
+        val preferences = listOf(
+            TEXT_MODEL,
+            "gemini-3.7-flash",
+            "gemini-3.6-flash",
+            "gemini-3.5-flash",
+            "gemini-3.5-flash-lite",
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite"
+        )
+        val selected = preferences.firstOrNull { it in available }
+            ?: available.firstOrNull { it.contains("flash", ignoreCase = true) }
+
+        if (selected == null) {
+            throw IOException(
+                "Token authenticate ho gaya, lekin is Google project par koi supported Gemini Flash model " +
+                    "nahi mila. AI Studio > Projects mein project import/enable karo aur API Keys mein " +
+                    "Auth key ka Key Type check karo."
+            )
+        }
+
+        cachedKeyFingerprint = hash
+        cachedTextModel = selected
+        selected
+    }
+
+    private fun formatApiError(code: Int, data: JSONObject?, raw: String): String {
+        val error = data?.optJSONObject("error")
+        val message = error?.optString("message")?.takeIf { it.isNotBlank() }
+            ?: raw.take(500).ifBlank { "No error details returned." }
+        val status = error?.optString("status").orEmpty()
+        val reason = runCatching {
+            val details = error?.optJSONArray("details") ?: JSONArray()
+            (0 until details.length()).firstNotNullOfOrNull { i ->
+                details.optJSONObject(i)?.optString("reason")?.takeIf { it.isNotBlank() }
+            }.orEmpty()
+        }.getOrDefault("")
+
+        return when {
+            code == 400 && (message.contains("API key not valid", true) || reason.contains("API_KEY_INVALID", true)) ->
+                "API token invalid hai. AI Studio se poori Auth key dobara copy karo; quotes ya API_KEY= text paste mat karo. ($code)"
+            code == 400 && status.equals("FAILED_PRECONDITION", true) ->
+                "Google project ki prerequisite poori nahi. AI Studio Projects/Billing mein Gemini API access aur region eligibility check karo. ($code)"
+            code == 401 ->
+                "Google ne token authenticate nahi kiya. AI Studio mein Key Type = Auth check karo; purani Standard key September 2026 ke baad reject ho sakti hai. ($code)"
+            code == 403 ->
+                "Token mila hai lekin Google project ko Gemini API ki permission nahi. AI Studio mein sahi project import karo aur API Keys ka Key Type/Generative Language API access check karo. ($code: $message)"
+            code == 404 ->
+                "Is Google project ke liye model/API endpoint available nahi mila. Project ke available models check karo. ($code: $message)"
+            code == 429 ->
+                "Gemini quota ya rate limit poori ho gayi. Nayi key banane se project quota reset nahi hota; quota reset ka intezar karo. ($code: $message)"
+            code == 402 ->
+                "Google project ka prepaid balance khatam hai. Billing status check karo. ($code)"
+            code == 503 || code == 502 || code == 500 ->
+                "Google Gemini service filhal busy hai. Internet check karke kuch der baad dobara try karo. ($code)"
+            else -> "Gemini API error HTTP $code: $message"
+        }
     }
 
     suspend fun sendMessage(
@@ -48,8 +171,9 @@ class BixApiClient {
         onChunk: suspend (String) -> Unit,
         onAction: suspend (BixAction) -> String
     ): String = withContext(Dispatchers.IO) {
-        val key = apiKey.trim()
+        val key = normalizeApiKey(apiKey)
         if (key.isBlank()) throw IOException("Gemini token missing hai. Settings mein Add your token karo.")
+        val selectedModel = resolveTextModel(key)
 
         val contents = JSONArray()
         history.takeLast(24).forEach { item ->
@@ -100,9 +224,13 @@ class BixApiClient {
                     .put("temperature", 0.72)
                     .put("topP", 0.92)
                     .put("maxOutputTokens", 1200)
-                    .put("thinkingConfig", JSONObject().put("thinkingLevel", "low")))
+                    .put("thinkingConfig", if (selectedModel.startsWith("gemini-2.5")) {
+                        JSONObject().put("thinkingBudget", 0)
+                    } else {
+                        JSONObject().put("thinkingLevel", "low")
+                    }))
             }
-            val response = executeGenerate(key, requestBody)
+            val response = executeGenerate(key, requestBody, selectedModel)
             val candidate = response.optJSONArray("candidates")?.optJSONObject(0)
                 ?: throw IOException(response.optJSONObject("error")?.optString("message") ?: "Gemini se response nahi mili.")
             val modelContent = candidate.optJSONObject("content") ?: JSONObject()
@@ -142,19 +270,22 @@ class BixApiClient {
         finalText
     }
 
-    private fun executeGenerate(apiKey: String, body: JSONObject): JSONObject {
+    private fun executeGenerate(apiKey: String, body: JSONObject, model: String): JSONObject {
         val request = Request.Builder()
-            .url("$API_BASE/v1beta/models/$TEXT_MODEL:generateContent")
+            .url("$API_BASE/v1beta/models/$model:generateContent")
             .header("x-goog-api-key", apiKey)
             .header("Content-Type", "application/json")
             .post(body.toString().toRequestBody(jsonType))
             .build()
-        client.newCall(request).execute().use { response ->
+        val call = client.newCall(request)
+        call.timeout().timeout(38, TimeUnit.SECONDS)
+        call.execute().use { response ->
             val raw = response.body?.string().orEmpty()
             val data = runCatching { JSONObject(raw) }.getOrNull()
             if (!response.isSuccessful) {
                 val detail = data?.optJSONObject("error")?.optString("message")
-                throw IOException(detail?.takeIf { it.isNotBlank() } ?: "Gemini API error: HTTP ${response.code}")
+                val message = detail?.takeIf { it.isNotBlank() } ?: "Gemini API error"
+                throw IOException(formatApiError(response.code, data, message))
             }
             return data ?: throw IOException("Gemini ka response JSON format mein nahi tha.")
         }
