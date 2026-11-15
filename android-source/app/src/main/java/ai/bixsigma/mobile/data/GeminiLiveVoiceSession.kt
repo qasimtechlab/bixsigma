@@ -72,24 +72,31 @@ class GeminiLiveVoiceSession(
         if (socket != null) return
         stopped.set(false)
         onState("Connecting to Gemini Live...")
+        val cleanKey = apiKey.trim().replace(Regex("\\s+"), "")
         val url = HttpUrl.Builder()
             .scheme("wss")
             .host("generativelanguage.googleapis.com")
             .addPathSegments("ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent")
-            .addQueryParameter("key", apiKey.trim())
+            .addQueryParameter("key", cleanKey)
             .build()
         val request = Request.Builder().url(url).build()
         socket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 socket = webSocket
-                webSocket.send(JSONObject().put("setup", setupConfig()).toString())
+                if (!webSocket.send(JSONObject().put("setup", setupConfig()).toString())) {
+                    onError("Gemini Live setup request send nahi ho saki. Internet dobara check karo.")
+                    webSocket.close(1001, "Setup send failed")
+                }
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
                 try {
                     handleServerMessage(webSocket, JSONObject(text))
                 } catch (e: Exception) {
-                    onError("Gemini Live response samajh nahi aaya: ${e.message ?: "invalid response"}")
+                    stopAudio()
+                    onError("Voice session initialize nahi ho saka: ${e.message ?: "unknown error"}. Retry dabao.")
+                    onState("Disconnected")
+                    webSocket.close(1011, "Voice session initialization failed")
                 }
             }
 
@@ -125,7 +132,7 @@ class GeminiLiveVoiceSession(
                 put("responseModalities", JSONArray().put("AUDIO"))
                 put("temperature", 0.75)
                 put("speechConfig", JSONObject().put("voiceConfig", JSONObject().put(
-                    "prebuiltVoiceConfig", JSONObject().put("voiceName", "Kore")
+                    "prebuiltVoiceConfig", JSONObject().put("voiceName", "Puck")
                 )))
             })
             put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", voiceSystemInstruction()))))
@@ -149,9 +156,16 @@ class GeminiLiveVoiceSession(
 
     private fun handleServerMessage(webSocket: WebSocket, message: JSONObject) {
         if (message.has("setupComplete")) {
-            createAudioDevices()
-            startMicrophone()
-            onState("Listening — speak naturally")
+            try {
+                createAudioDevices()
+                startMicrophone()
+                onState("Listening — speak naturally")
+            } catch (e: Exception) {
+                stopAudio()
+                onError("Phone ka microphone/speaker start nahi ho saka: ${e.message ?: "audio device error"}. Microphone permission aur doosri voice apps check karo.")
+                onState("Disconnected")
+                webSocket.close(1011, "Audio device initialization failed")
+            }
             return
         }
 
