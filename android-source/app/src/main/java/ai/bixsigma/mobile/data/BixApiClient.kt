@@ -39,7 +39,7 @@ class BixApiClient {
         val key = normalizeApiKey(apiKey)
         if (key.isBlank()) throw IOException("Token khali hai. Google AI Studio se Auth API key paste karo.")
         val model = resolveTextModel(key, forceRefresh = true)
-        "connected:$model"
+        model
     }
 
     private fun normalizeApiKey(value: String): String {
