@@ -251,9 +251,9 @@ private fun AuthScreen(
                             loading = true
                             scope.launch {
                                 try {
-                                    api.checkApiKey(key.trim())
+                                    val model = api.checkApiKey(key)
                                     settings.apiKey = key.trim()
-                                    success = "Gemini token verified. Connection ready."
+                                    success = "Token verified. ${model} ready. Ab tumhara account connect kar sakte ho."
                                     step = 1
                                 } catch (e: Exception) {
                                     error = e.message ?: "Token verify nahi ho saka. Token aur Google AI Studio access check karo."
@@ -268,8 +268,17 @@ private fun AuthScreen(
                     shape = RoundedCornerShape(14.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = Cyan, contentColor = Bg)
                 ) {
-                    if (loading) CircularProgressIndicator(Modifier.size(19.dp), color = Bg, strokeWidth = 2.dp)
-                    else Text("VERIFY TOKEN  •  NEXT", fontWeight = FontWeight.ExtraBold, fontSize = 13.sp)
+                    if (loading) {
+                        CircularProgressIndicator(Modifier.size(19.dp), color = Bg, strokeWidth = 2.dp)
+                        Spacer(Modifier.width(9.dp))
+                        Text("CHECKING TOKEN…", fontWeight = FontWeight.ExtraBold, fontSize = 12.sp)
+                    } else Text("VERIFY TOKEN  •  NEXT", fontWeight = FontWeight.ExtraBold, fontSize = 13.sp)
+                }
+                if (loading) {
+                    Text(
+                        "Gemini access aur available model check ho raha hai. Is check ki hard limit 12 seconds hai.",
+                        color = Muted, fontSize = 10.sp, lineHeight = 14.sp
+                    )
                 }
             } else {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -678,10 +687,10 @@ private fun ChatScreen(account: BixAccount, settings: SettingsStore, firebase: F
                         settingsBusy = true
                         scope.launch {
                             try {
-                                api.checkApiKey(key.trim())
+                                val model = api.checkApiKey(key)
                                 settings.apiKey = key.trim()
                                 showSettings = false
-                                notice = "Gemini token verified and saved."
+                                notice = "Gemini token verified. $model ready."
                             } catch (e: Exception) {
                                 errorText = e.message ?: "Token verify nahi ho saka."
                             } finally {
@@ -691,8 +700,13 @@ private fun ChatScreen(account: BixAccount, settings: SettingsStore, firebase: F
                     }
                 }
             ) {
-                if (settingsBusy) CircularProgressIndicator(Modifier.size(16.dp), color = Cyan, strokeWidth = 2.dp)
-                else Text("SAVE & TEST", color = Cyan)
+                if (settingsBusy) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(Modifier.size(16.dp), color = Cyan, strokeWidth = 2.dp)
+                        Spacer(Modifier.width(7.dp))
+                        Text("CHECKING…", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                } else Text("SAVE & TEST", color = Cyan)
             }
         },
         dismissButton = { TextButton(onClick = { showSettings = false }) { Text("CANCEL", color = Muted) } },
